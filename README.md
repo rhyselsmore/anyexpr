@@ -1,5 +1,10 @@
 # anyexpr
 
+[![Go Reference](https://pkg.go.dev/badge/github.com/rhyselsmore/anyexpr.svg)](https://pkg.go.dev/github.com/rhyselsmore/anyexpr)
+[![CI](https://github.com/rhyselsmore/anyexpr/actions/workflows/ci.yml/badge.svg)](https://github.com/rhyselsmore/anyexpr/actions/workflows/ci.yml)
+[![Go Report Card](https://goreportcard.com/badge/github.com/rhyselsmore/anyexpr)](https://goreportcard.com/report/github.com/rhyselsmore/anyexpr)
+[![codecov](https://codecov.io/gh/rhyselsmore/anyexpr/branch/main/graph/badge.svg)](https://codecov.io/gh/rhyselsmore/anyexpr)
+
 A generic expression compilation and evaluation library for Go, built on
 [expr-lang](https://expr-lang.org).
 
@@ -65,8 +70,10 @@ matched, err := prog.Match(Email{
 
 ## Features
 
-- **Typed compilation** — expressions are validated against your struct
-  fields at compile time, not at evaluation time.
+- **Typed compilation** — expr-lang validates expression field names and
+  types against your struct at compile time. anyexpr wraps this with Go
+  generics (`Compiler[T]`, `Program[T]`) so the environment type flows
+  through your Go code as well — no `any` casts or manual `expr.Env()` calls.
 - **Built-in functions** — `has`, `starts`, `ends`, `eq`, `re`, `glob`,
   `extract`, `domain`, and more. Case-insensitive by default, with `x`-prefixed
   case-sensitive variants (`xhas`, `xstarts`, etc.).
