@@ -70,7 +70,6 @@ func wrapString2(name string, fn func(string, string) string) expr.Option {
 	)
 }
 
-
 // defaultBuiltinOpts returns the expr.Option slice for all built-in functions.
 func defaultBuiltinOpts() []expr.Option {
 	return []expr.Option{
@@ -110,10 +109,10 @@ func builtinOptsByName() map[string]expr.Option {
 		"ends": wrapBool2("ends", biEnds), "eq": wrapBool2("eq", biEq),
 		"xhas": wrapBool2("xhas", biXhas), "xstarts": wrapBool2("xstarts", biXstarts),
 		"xends": wrapBool2("xends", biXends),
-		"re": wrapBool2("re", biRe), "xre": wrapBool2("xre", biXre),
-		"glob": wrapBool2("glob", biGlob),
+		"re":    wrapBool2("re", biRe), "xre": wrapBool2("xre", biXre),
+		"glob":  wrapBool2("glob", biGlob),
 		"lower": wrapString1("lower", biLower), "upper": wrapString1("upper", biUpper),
-		"trim": wrapString1("trim", biTrim),
+		"trim":  wrapString1("trim", biTrim),
 		"words": wrapStrings1("words", biWords), "lines": wrapStrings1("lines", biLines),
 		"extract": wrapString2("extract", biExtract), "email_domain": wrapString1("email_domain", biDomain),
 	}
