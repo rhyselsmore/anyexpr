@@ -7,58 +7,68 @@ import (
 	"github.com/rhyselsmore/anyexpr"
 )
 
-type testEnv struct {
+type compileEnv struct {
 	Name   string
 	Amount float64
-	Tags   []string
 	Active bool
 }
 
-func testRegistry(t *testing.T, opts ...RegistryOpt) *Registry {
-	t.Helper()
-	defaults := []RegistryOpt{
-		WithAction("tag", Multi, StringVal, false),
-		WithAction("category", Single, StringVal, false),
-		WithAction("flag", Single, BoolValue, false),
-		WithAction("delete", Single, NoValue, true),
-		WithAction("expr-tag", Multi, StringExpr, false),
-	}
-	r, err := NewRegistry(append(defaults, opts...)...)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return r
+type compileActions[E any] struct {
+	Label    Action[string, E]  `rule:"label,multi"`
+	Category Action[string, E]  `rule:"category"`
+	Read     Action[bool, E]    `rule:"read"`
+	Priority Action[int, E]     `rule:"priority"`
+	Score    Action[float64, E] `rule:"score"`
+	Delete   Action[NoArgs, E]  `rule:"delete,terminal"`
 }
 
-func testCompiler(t *testing.T) *anyexpr.Compiler[testEnv] {
+func compileSetup(t *testing.T) (*Actions[compileActions[compileEnv], compileEnv], *anyexpr.Compiler[compileEnv]) {
 	t.Helper()
-	c, err := anyexpr.NewCompiler[testEnv]()
+	actions, err := DefineActions[compileActions[compileEnv], compileEnv]()
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("DefineActions: %v", err)
 	}
-	return c
+	compiler, err := anyexpr.NewCompiler[compileEnv]()
+	if err != nil {
+		t.Fatalf("NewCompiler: %v", err)
+	}
+	return actions, compiler
 }
 
-// --- Compilation ---
-
-func TestCompile_ValidRules(t *testing.T) {
+func TestCompile_Valid(t *testing.T) {
 	t.Parallel()
-	rs, err := Compile(testRegistry(t), testCompiler(t), []Definition{
-		{Name: "r1", When: `has(Name, "alice")`, Then: []ActionEntry{{Name: "tag", Value: "vip"}}},
+	actions, compiler := compileSetup(t)
+	rs, err := Compile(actions, compiler, []Definition{
+		{
+			Name: "r1",
+			When: `has(Name, "alice")`,
+			Then: []ActionEntry{
+				{Name: "label", Value: "friend"},
+				{Name: "read", Value: true},
+			},
+		},
+		{
+			Name: "r2",
+			When: `Amount > 100`,
+			Then: []ActionEntry{
+				{Name: "category", Value: "large"},
+			},
+		},
 	})
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("unexpected error: %v", err)
 	}
-	if rs.Len() != 1 {
-		t.Errorf("got %d rules, want 1", rs.Len())
+	if rs.Len() != 2 {
+		t.Errorf("got %d rules, want 2", rs.Len())
 	}
 }
 
 func TestCompile_DuplicateRuleNames(t *testing.T) {
 	t.Parallel()
-	_, err := Compile(testRegistry(t), testCompiler(t), []Definition{
-		{Name: "r1", When: "true", Then: []ActionEntry{{Name: "tag", Value: "a"}}},
-		{Name: "r1", When: "true", Then: []ActionEntry{{Name: "tag", Value: "b"}}},
+	actions, compiler := compileSetup(t)
+	_, err := Compile(actions, compiler, []Definition{
+		{Name: "r1", When: `Active`},
+		{Name: "r1", When: `Active`},
 	})
 	if !errors.Is(err, ErrDuplicateRule) {
 		t.Errorf("got %v, want ErrDuplicateRule", err)
@@ -67,159 +77,238 @@ func TestCompile_DuplicateRuleNames(t *testing.T) {
 
 func TestCompile_UnknownAction(t *testing.T) {
 	t.Parallel()
-	_, err := Compile(testRegistry(t), testCompiler(t), []Definition{
-		{Name: "r1", When: "true", Then: []ActionEntry{{Name: "nope", Value: "x"}}},
+	actions, compiler := compileSetup(t)
+	_, err := Compile(actions, compiler, []Definition{
+		{
+			Name: "r1",
+			When: `Active`,
+			Then: []ActionEntry{{Name: "nope", Value: "x"}},
+		},
 	})
 	if !errors.Is(err, ErrUnknownAction) {
 		t.Errorf("got %v, want ErrUnknownAction", err)
 	}
 }
 
-func TestCompile_MultipleTerminals(t *testing.T) {
+func TestCompile_BadExpression(t *testing.T) {
 	t.Parallel()
-	reg, _ := NewRegistry(
-		WithAction("del1", Single, NoValue, true),
-		WithAction("del2", Single, NoValue, true),
-	)
-	_, err := Compile(reg, testCompiler(t), []Definition{
-		{Name: "r1", When: "true", Then: []ActionEntry{{Name: "del1"}, {Name: "del2"}}},
+	actions, compiler := compileSetup(t)
+	_, err := Compile(actions, compiler, []Definition{
+		{Name: "r1", When: `invalid!!!`},
 	})
-	if !errors.Is(err, ErrMultipleTerminals) {
-		t.Errorf("got %v, want ErrMultipleTerminals", err)
+	if !errors.Is(err, ErrCompile) {
+		t.Errorf("got %v, want ErrCompile", err)
 	}
 }
 
-func TestCompile_SingleUseViolation(t *testing.T) {
+func TestCompile_BoolValueValid(t *testing.T) {
 	t.Parallel()
-	_, err := Compile(testRegistry(t), testCompiler(t), []Definition{
-		{Name: "r1", When: "true", Then: []ActionEntry{
-			{Name: "category", Value: "a"},
-			{Name: "category", Value: "b"},
-		}},
+	actions, compiler := compileSetup(t)
+	_, err := Compile(actions, compiler, []Definition{
+		{
+			Name: "r1",
+			When: `Active`,
+			Then: []ActionEntry{{Name: "read", Value: true}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestCompile_BoolValueInvalid(t *testing.T) {
+	t.Parallel()
+	actions, compiler := compileSetup(t)
+	_, err := Compile(actions, compiler, []Definition{
+		{
+			Name: "r1",
+			When: `Active`,
+			Then: []ActionEntry{{Name: "read", Value: "banana"}},
+		},
+	})
+	if !errors.Is(err, ErrValueType) {
+		t.Errorf("got %v, want ErrValueType", err)
+	}
+}
+
+func TestCompile_IntValueValid(t *testing.T) {
+	t.Parallel()
+	actions, compiler := compileSetup(t)
+	_, err := Compile(actions, compiler, []Definition{
+		{
+			Name: "r1",
+			When: `Active`,
+			Then: []ActionEntry{{Name: "priority", Value: 42}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestCompile_IntValueInvalid(t *testing.T) {
+	t.Parallel()
+	actions, compiler := compileSetup(t)
+	_, err := Compile(actions, compiler, []Definition{
+		{
+			Name: "r1",
+			When: `Active`,
+			Then: []ActionEntry{{Name: "priority", Value: "notint"}},
+		},
+	})
+	if !errors.Is(err, ErrValueType) {
+		t.Errorf("got %v, want ErrValueType", err)
+	}
+}
+
+func TestCompile_Float64ValueValid(t *testing.T) {
+	t.Parallel()
+	actions, compiler := compileSetup(t)
+	_, err := Compile(actions, compiler, []Definition{
+		{
+			Name: "r1",
+			When: `Active`,
+			Then: []ActionEntry{{Name: "score", Value: 0.95}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestCompile_Float64ValueInvalid(t *testing.T) {
+	t.Parallel()
+	actions, compiler := compileSetup(t)
+	_, err := Compile(actions, compiler, []Definition{
+		{
+			Name: "r1",
+			When: `Active`,
+			Then: []ActionEntry{{Name: "score", Value: "nope"}},
+		},
+	})
+	if !errors.Is(err, ErrValueType) {
+		t.Errorf("got %v, want ErrValueType", err)
+	}
+}
+
+func TestCompile_NoArgsWithValue(t *testing.T) {
+	t.Parallel()
+	actions, compiler := compileSetup(t)
+	_, err := Compile(actions, compiler, []Definition{
+		{
+			Name: "r1",
+			When: `Active`,
+			Then: []ActionEntry{{Name: "delete", Value: "oops"}},
+		},
+	})
+	if !errors.Is(err, ErrValueType) {
+		t.Errorf("got %v, want ErrValueType", err)
+	}
+}
+
+func TestCompile_NoArgsEmpty(t *testing.T) {
+	t.Parallel()
+	actions, compiler := compileSetup(t)
+	_, err := Compile(actions, compiler, []Definition{
+		{
+			Name: "r1",
+			When: `Active`,
+			Then: []ActionEntry{{Name: "delete", Value: NoArgs{}}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestCompile_CardinalityViolation(t *testing.T) {
+	t.Parallel()
+	actions, compiler := compileSetup(t)
+	_, err := Compile(actions, compiler, []Definition{
+		{
+			Name: "r1",
+			When: `Active`,
+			Then: []ActionEntry{
+				{Name: "category", Value: "a"},
+				{Name: "category", Value: "b"}, // single used twice
+			},
+		},
 	})
 	if !errors.Is(err, ErrCardinalityViolation) {
 		t.Errorf("got %v, want ErrCardinalityViolation", err)
 	}
 }
 
-func TestCompile_BadWhenExpression(t *testing.T) {
+func TestCompile_MultiAllowedMultipleTimes(t *testing.T) {
 	t.Parallel()
-	_, err := Compile(testRegistry(t), testCompiler(t), []Definition{
-		{Name: "r1", When: `has(Name, `, Then: []ActionEntry{{Name: "tag", Value: "x"}}},
-	})
-	if !errors.Is(err, ErrCompile) {
-		t.Errorf("got %v, want ErrCompile", err)
-	}
-}
-
-func TestCompile_BadValueExpression(t *testing.T) {
-	t.Parallel()
-	_, err := Compile(testRegistry(t), testCompiler(t), []Definition{
-		{Name: "r1", When: "true", Then: []ActionEntry{{Name: "expr-tag", Value: `has(Name, `}}},
-	})
-	if !errors.Is(err, ErrCompile) {
-		t.Errorf("got %v, want ErrCompile", err)
-	}
-}
-
-func TestCompile_BoolValueParsing(t *testing.T) {
-	t.Parallel()
-	for _, val := range []string{"true", "false"} {
-		_, err := Compile(testRegistry(t), testCompiler(t), []Definition{
-			{Name: "r-" + val, When: "true", Then: []ActionEntry{{Name: "flag", Value: val}}},
-		})
-		if err != nil {
-			t.Errorf("bool %q: %v", val, err)
-		}
-	}
-}
-
-func TestCompile_BoolValueInvalid(t *testing.T) {
-	t.Parallel()
-	_, err := Compile(testRegistry(t), testCompiler(t), []Definition{
-		{Name: "r1", When: "true", Then: []ActionEntry{{Name: "flag", Value: "yes"}}},
-	})
-	if !errors.Is(err, ErrValueType) {
-		t.Errorf("got %v, want ErrValueType", err)
-	}
-}
-
-func TestCompile_NoValueWithValue(t *testing.T) {
-	t.Parallel()
-	_, err := Compile(testRegistry(t), testCompiler(t), []Definition{
-		{Name: "r1", When: "true", Then: []ActionEntry{{Name: "delete", Value: "oops"}}},
-	})
-	if !errors.Is(err, ErrValueType) {
-		t.Errorf("got %v, want ErrValueType", err)
-	}
-}
-
-func TestCompile_DisabledRule(t *testing.T) {
-	t.Parallel()
-	f := false
-	_, err := Compile(testRegistry(t), testCompiler(t), []Definition{
-		{Name: "r1", Enabled: &f, When: "true", Then: []ActionEntry{{Name: "tag", Value: "x"}}},
+	actions, compiler := compileSetup(t)
+	_, err := Compile(actions, compiler, []Definition{
+		{
+			Name: "r1",
+			When: `Active`,
+			Then: []ActionEntry{
+				{Name: "label", Value: "a"},
+				{Name: "label", Value: "b"},
+			},
+		},
 	})
 	if err != nil {
-		t.Fatalf("disabled rules should still compile: %v", err)
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
-func TestCompile_StopImpliedByTerminal(t *testing.T) {
+func TestCompile_TerminalImpliesStop(t *testing.T) {
 	t.Parallel()
-	rs, _ := Compile(testRegistry(t), testCompiler(t), []Definition{
-		{Name: "r1", When: "true", Then: []ActionEntry{{Name: "delete"}}},
+	actions, compiler := compileSetup(t)
+	rs, err := Compile(actions, compiler, []Definition{
+		{
+			Name: "r1",
+			When: `Active`,
+			Then: []ActionEntry{{Name: "delete", Value: NoArgs{}}},
+		},
 	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if !rs.rules[0].stop {
-		t.Error("terminal action should imply stop")
+		t.Error("expected stop to be true for terminal action")
 	}
 }
 
 func TestCompile_EmptyDefinitions(t *testing.T) {
 	t.Parallel()
-	rs, err := Compile(testRegistry(t), testCompiler(t), []Definition{})
+	actions, compiler := compileSetup(t)
+	rs, err := Compile(actions, compiler, []Definition{})
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("unexpected error: %v", err)
 	}
 	if rs.Len() != 0 {
-		t.Errorf("got %d, want 0", rs.Len())
+		t.Errorf("got %d rules, want 0", rs.Len())
 	}
 }
 
-// --- Properties ---
+func TestCompile_NotDefined(t *testing.T) {
+	t.Parallel()
+	compiler, _ := anyexpr.NewCompiler[compileEnv]()
+	actions := &Actions[compileActions[compileEnv], compileEnv]{}
+	_, err := Compile(actions, compiler, nil)
+	if !errors.Is(err, ErrNotDefined) {
+		t.Errorf("got %v, want ErrNotDefined", err)
+	}
+}
+
+// --- Names / Len ---
 
 func TestRuleset_Names(t *testing.T) {
 	t.Parallel()
-	rs, _ := Compile(testRegistry(t), testCompiler(t), []Definition{
-		{Name: "b", When: "true", Then: []ActionEntry{{Name: "tag", Value: "x"}}},
-		{Name: "a", When: "true", Then: []ActionEntry{{Name: "tag", Value: "y"}}},
+	actions, compiler := compileSetup(t)
+	rs, _ := Compile(actions, compiler, []Definition{
+		{Name: "a", When: `Active`},
+		{Name: "b", When: `Active`},
 	})
 	names := rs.Names()
-	if len(names) != 2 || names[0] != "b" || names[1] != "a" {
-		t.Errorf("got %v, want [b a] (definition order)", names)
-	}
-}
-
-func TestRuleset_Tags(t *testing.T) {
-	t.Parallel()
-	rs, _ := Compile(testRegistry(t), testCompiler(t), []Definition{
-		{Name: "r1", Tags: []string{"x", "y"}, When: "true", Then: []ActionEntry{{Name: "tag", Value: "a"}}},
-		{Name: "r2", Tags: []string{"y", "z"}, When: "true", Then: []ActionEntry{{Name: "tag", Value: "b"}}},
-	})
-	tags := rs.Tags()
-	if len(tags) != 3 {
-		t.Errorf("got %v, want 3 unique tags", tags)
-	}
-}
-
-func TestRuleset_Len(t *testing.T) {
-	t.Parallel()
-	rs, _ := Compile(testRegistry(t), testCompiler(t), []Definition{
-		{Name: "r1", When: "true", Then: []ActionEntry{{Name: "tag", Value: "a"}}},
-		{Name: "r2", When: "true", Then: []ActionEntry{{Name: "tag", Value: "b"}}},
-	})
-	if rs.Len() != 2 {
-		t.Errorf("got %d, want 2", rs.Len())
+	if len(names) != 2 || names[0] != "a" || names[1] != "b" {
+		t.Errorf("got %v, want [a b]", names)
 	}
 }
 
@@ -227,26 +316,24 @@ func TestRuleset_Len(t *testing.T) {
 
 func TestRuleset_Merge_NoCollision(t *testing.T) {
 	t.Parallel()
-	reg := testRegistry(t)
-	c := testCompiler(t)
-	a, _ := Compile(reg, c, []Definition{{Name: "r1", When: "true", Then: []ActionEntry{{Name: "tag", Value: "a"}}}})
-	b, _ := Compile(reg, c, []Definition{{Name: "r2", When: "true", Then: []ActionEntry{{Name: "tag", Value: "b"}}}})
+	actions, compiler := compileSetup(t)
+	a, _ := Compile(actions, compiler, []Definition{{Name: "a", When: `Active`}})
+	b, _ := Compile(actions, compiler, []Definition{{Name: "b", When: `Active`}})
 
 	merged, err := a.Merge(b)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("unexpected error: %v", err)
 	}
 	if merged.Len() != 2 {
-		t.Errorf("got %d, want 2", merged.Len())
+		t.Errorf("got %d rules, want 2", merged.Len())
 	}
 }
 
 func TestRuleset_Merge_Collision(t *testing.T) {
 	t.Parallel()
-	reg := testRegistry(t)
-	c := testCompiler(t)
-	a, _ := Compile(reg, c, []Definition{{Name: "r1", When: "true", Then: []ActionEntry{{Name: "tag", Value: "a"}}}})
-	b, _ := Compile(reg, c, []Definition{{Name: "r1", When: "true", Then: []ActionEntry{{Name: "tag", Value: "b"}}}})
+	actions, compiler := compileSetup(t)
+	a, _ := Compile(actions, compiler, []Definition{{Name: "x", When: `Active`}})
+	b, _ := Compile(actions, compiler, []Definition{{Name: "x", When: `Active`}})
 
 	_, err := a.Merge(b)
 	if !errors.Is(err, ErrNameCollision) {
@@ -256,41 +343,15 @@ func TestRuleset_Merge_Collision(t *testing.T) {
 
 func TestRuleset_Merge_AllowOverride(t *testing.T) {
 	t.Parallel()
-	reg := testRegistry(t)
-	c := testCompiler(t)
-	a, _ := Compile(reg, c, []Definition{
-		{Name: "r1", When: "true", Then: []ActionEntry{{Name: "tag", Value: "original"}}},
-		{Name: "r2", When: "true", Then: []ActionEntry{{Name: "tag", Value: "keep"}}},
-	})
-	b, _ := Compile(reg, c, []Definition{
-		{Name: "r1", When: "true", Then: []ActionEntry{{Name: "tag", Value: "override"}}},
-	})
+	actions, compiler := compileSetup(t)
+	a, _ := Compile(actions, compiler, []Definition{{Name: "x", When: `Active`}})
+	b, _ := Compile(actions, compiler, []Definition{{Name: "x", When: `!Active`}})
 
 	merged, err := a.Merge(b, AllowOverride)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("unexpected error: %v", err)
 	}
-	if merged.Len() != 2 {
-		t.Errorf("got %d, want 2", merged.Len())
-	}
-	// r1 should be at position 0 (original position) with override value.
-	if merged.Names()[0] != "r1" {
-		t.Error("r1 should keep its position")
-	}
-}
-
-func TestRuleset_Merge_NeitherModified(t *testing.T) {
-	t.Parallel()
-	reg := testRegistry(t)
-	c := testCompiler(t)
-	a, _ := Compile(reg, c, []Definition{{Name: "r1", When: "true", Then: []ActionEntry{{Name: "tag", Value: "a"}}}})
-	b, _ := Compile(reg, c, []Definition{{Name: "r2", When: "true", Then: []ActionEntry{{Name: "tag", Value: "b"}}}})
-
-	a.Merge(b)
-	if a.Len() != 1 {
-		t.Error("a was modified")
-	}
-	if b.Len() != 1 {
-		t.Error("b was modified")
+	if merged.Len() != 1 {
+		t.Errorf("got %d rules, want 1", merged.Len())
 	}
 }

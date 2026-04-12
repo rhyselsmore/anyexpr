@@ -24,5 +24,5 @@ func (d Definition) IsEnabled() bool {
 // ActionEntry is a single action within a rule's Then list.
 type ActionEntry struct {
 	Name  string
-	Value string
+	Value any
 }

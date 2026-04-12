@@ -2,106 +2,95 @@ package rules
 
 import "testing"
 
-func TestSelector_IncludesByTag(t *testing.T) {
+func TestSelector_NoFilters(t *testing.T) {
 	t.Parallel()
-	s := selector{onlyTags: map[string]bool{"urgent": true}}
-	if !s.includes("rule1", []string{"urgent", "billing"}) {
-		t.Error("expected included by tag")
-	}
-	if s.includes("rule1", []string{"billing"}) {
-		t.Error("expected excluded, no matching tag")
+	s := selector{}
+	if !s.includes("anything", nil) {
+		t.Error("no filters should include everything")
 	}
 }
 
-func TestSelector_IncludesByName(t *testing.T) {
+func TestSelector_OnlyTags_Match(t *testing.T) {
 	t.Parallel()
-	s := selector{onlyNames: map[string]bool{"rule1": true}}
-	if !s.includes("rule1", nil) {
-		t.Error("expected included by name")
-	}
-	if s.includes("rule2", nil) {
-		t.Error("expected excluded, wrong name")
+	s := selector{onlyTags: map[string]bool{"billing": true}}
+	if !s.includes("r1", []string{"billing", "auto"}) {
+		t.Error("should match on tag")
 	}
 }
 
-func TestSelector_ExcludesByTag(t *testing.T) {
+func TestSelector_OnlyTags_NoMatch(t *testing.T) {
 	t.Parallel()
-	s := selector{excludeTags: map[string]bool{"internal": true}}
-	if s.includes("rule1", []string{"internal"}) {
-		t.Error("expected excluded by tag")
-	}
-	if !s.includes("rule1", []string{"external"}) {
-		t.Error("expected included")
+	s := selector{onlyTags: map[string]bool{"billing": true}}
+	if s.includes("r1", []string{"shipping"}) {
+		t.Error("should not match")
 	}
 }
 
-func TestSelector_ExcludesByName(t *testing.T) {
+func TestSelector_OnlyNames_Match(t *testing.T) {
 	t.Parallel()
-	s := selector{excludeNames: map[string]bool{"rule1": true}}
-	if s.includes("rule1", nil) {
-		t.Error("expected excluded by name")
+	s := selector{onlyNames: map[string]bool{"r1": true}}
+	if !s.includes("r1", nil) {
+		t.Error("should match on name")
 	}
-	if !s.includes("rule2", nil) {
-		t.Error("expected included")
+}
+
+func TestSelector_OnlyNames_NoMatch(t *testing.T) {
+	t.Parallel()
+	s := selector{onlyNames: map[string]bool{"r1": true}}
+	if s.includes("r2", nil) {
+		t.Error("should not match")
+	}
+}
+
+func TestSelector_ExcludeTags(t *testing.T) {
+	t.Parallel()
+	s := selector{excludeTags: map[string]bool{"archived": true}}
+	if s.includes("r1", []string{"archived"}) {
+		t.Error("should be excluded")
+	}
+	if !s.includes("r2", []string{"active"}) {
+		t.Error("should be included")
+	}
+}
+
+func TestSelector_ExcludeNames(t *testing.T) {
+	t.Parallel()
+	s := selector{excludeNames: map[string]bool{"r1": true}}
+	if s.includes("r1", nil) {
+		t.Error("should be excluded")
+	}
+	if !s.includes("r2", nil) {
+		t.Error("should be included")
 	}
 }
 
 func TestSelector_ExcludeOverridesInclude(t *testing.T) {
 	t.Parallel()
 	s := selector{
-		onlyNames:    map[string]bool{"rule1": true},
-		excludeNames: map[string]bool{"rule1": true},
+		onlyTags:    map[string]bool{"billing": true},
+		excludeNames: map[string]bool{"r1": true},
 	}
-	if s.includes("rule1", nil) {
+	if s.includes("r1", []string{"billing"}) {
 		t.Error("exclude should override include")
 	}
 }
 
-func TestSelector_EmptyIncludesAll(t *testing.T) {
-	t.Parallel()
-	s := selector{}
-	if !s.includes("anything", []string{"any", "tag"}) {
-		t.Error("empty selector should include everything")
-	}
-}
-
-func TestSelector_BothTagAndNameIncludes(t *testing.T) {
+func TestSelector_OnlyTagsAndNames_Union(t *testing.T) {
 	t.Parallel()
 	s := selector{
-		onlyTags:  map[string]bool{"urgent": true},
-		onlyNames: map[string]bool{"rule1": true},
+		onlyTags:  map[string]bool{"billing": true},
+		onlyNames: map[string]bool{"r2": true},
 	}
-	// Either match suffices.
-	if !s.includes("rule1", nil) {
-		t.Error("should match by name")
-	}
-	if !s.includes("rule2", []string{"urgent"}) {
+	// Matches by tag.
+	if !s.includes("r1", []string{"billing"}) {
 		t.Error("should match by tag")
 	}
-	if s.includes("rule2", []string{"billing"}) {
-		t.Error("should not match, neither name nor tag")
+	// Matches by name.
+	if !s.includes("r2", []string{"shipping"}) {
+		t.Error("should match by name")
 	}
-}
-
-func TestSelector_MergeUnionsExcludes(t *testing.T) {
-	t.Parallel()
-	a := selector{excludeNames: map[string]bool{"r1": true}}
-	b := selector{excludeNames: map[string]bool{"r2": true}}
-	m := a.merge(b)
-	if m.includes("r1", nil) || m.includes("r2", nil) {
-		t.Error("merged excludes should union")
-	}
-	if !m.includes("r3", nil) {
-		t.Error("r3 should be included")
-	}
-}
-
-func TestSelector_MergeIntersectsIncludes(t *testing.T) {
-	t.Parallel()
-	a := selector{onlyTags: map[string]bool{"urgent": true, "billing": true}}
-	b := selector{onlyTags: map[string]bool{"urgent": true, "shipping": true}}
-	m := a.merge(b)
-	if !m.includes("r1", []string{"urgent"}) {
-		t.Error("urgent is in both, should be included")
+	// Neither.
+	if s.includes("r3", []string{"shipping"}) {
+		t.Error("should not match")
 	}
 }

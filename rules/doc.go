@@ -1,15 +1,15 @@
-// Package rules is a generic rule evaluation engine built on [anyexpr].
+// Package rules is a generic, typed rule evaluation engine built on [anyexpr].
 //
 // It provides a when/then model: match an expression against a typed
-// environment, accumulate actions, resolve them, and optionally execute
-// handlers. The engine is domain-agnostic — the consuming package
-// registers its own action names, custom functions, and handler
-// implementations.
+// environment, accumulate typed actions, and read results through
+// compile-time-safe accessors.
 //
 // The package uses two type parameters:
 //
-//   - T is the environment type, used for expression compilation and evaluation.
-//   - V is the vars type, domain-specific context passed to handlers at execution time.
+//   - A is the actions struct type, containing [Action] fields that define
+//     what a rule can do. Defined once via [DefineActions].
+//   - E is the environment type, used for expression compilation and
+//     evaluation via [anyexpr].
 //
 // [anyexpr]: https://pkg.go.dev/github.com/rhyselsmore/anyexpr
 package rules

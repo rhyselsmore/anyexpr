@@ -1,12 +1,11 @@
 # anyexpr/rules
 
-A generic rule evaluation engine built on [anyexpr](../README.md).
+A typed rule evaluation engine built on [anyexpr](../README.md).
 
-Rules follow a when/then model: match an expression against a typed
-environment, accumulate actions, resolve them, and optionally execute
-handlers. The engine is domain-agnostic — the consuming package
-registers its own action names, custom functions, and handler
-implementations.
+Define actions as a struct with generic fields, compile rule definitions
+with type-checked values, and evaluate them against your environment
+type. Results are accessed through typed struct fields — no string keys,
+no type assertions.
 
 ## Install
 
@@ -17,130 +16,156 @@ go get github.com/rhyselsmore/anyexpr/rules
 ## Quick Start
 
 ```go
-type Transaction struct {
-    Merchant string
-    Amount   float64
-    Currency string
+type Email struct {
+    From    string
+    Subject string
+    Body    string
+    Amount  float64
 }
 
-// Register domain-specific actions.
-reg, _ := rules.NewRegistry(
-    rules.WithAction("categorize", rules.Single, rules.StringVal, false),
-    rules.WithAction("tag",        rules.Multi,  rules.StringVal, false),
-)
+// Declare actions as a generic struct. E is the environment type.
+type Actions[E any] struct {
+    Label    rules.Action[string, E]       `rule:"label,multi"`
+    Move     rules.Action[string, E]       `rule:"move"`
+    Read     rules.Action[bool, E]         `rule:"read"`
+    Priority rules.Action[int, E]          `rule:"priority"`
+    Delete   rules.Action[rules.NoArgs, E] `rule:"delete,terminal"`
+}
 
-// Compile rules.
-compiler, _ := anyexpr.NewCompiler[Transaction]()
-rs, _ := rules.Compile(reg, compiler, []rules.Definition{
+// Define actions — reflects over the struct once, configures all fields.
+actions, err := rules.DefineActions[Actions[Email], Email]()
+
+// Build the anyexpr compiler for your environment type.
+compiler, err := anyexpr.NewCompiler[Email]()
+
+// Compile rules — values are type-checked against the action's type.
+rs, err := rules.Compile(actions, compiler, []rules.Definition{
     {
-        Name: "groceries",
-        When: `has(Merchant, "woolworths") && Currency == "AUD"`,
+        Name: "invoices",
+        Tags: []string{"billing"},
+        When: `has(Subject, "invoice")`,
         Then: []rules.ActionEntry{
-            {Name: "categorize", Value: "groceries"},
-            {Name: "tag", Value: "supermarket"},
+            {Name: "label", Value: "billing"},
+            {Name: "label", Value: "invoice"},
+            {Name: "move", Value: "billing/invoices"},
+            {Name: "read", Value: true},
+            {Name: "priority", Value: 3},
+        },
+    },
+    {
+        Name: "spam",
+        When: `has(From, "noreply@junk.com")`,
+        Then: []rules.ActionEntry{
+            {Name: "delete", Value: rules.NoArgs{}},
         },
     },
 })
 
-// Run.
-engine, _ := rules.NewEngine[Transaction, struct{}](reg, rs)
-result, _ := engine.Run(ctx, tx, struct{}{})
+// Build evaluator.
+evaluator, err := rules.NewEvaluator(actions, rs)
 
-fmt.Println(result.Actions.ByName["categorize"]) // [groceries]
-fmt.Println(result.Actions.ByName["tag"])         // [supermarket]
+// Evaluate — returns typed results, no side effects.
+eval, err := evaluator.Run(ctx, email)
+
+// Read results through typed accessors.
+labels := eval.Actions.Label.Values()       // []string
+folder, ok := eval.Actions.Move.Value()     // string, bool
+read, ok := eval.Actions.Read.Value()       // bool, bool
+priority, ok := eval.Actions.Priority.Value() // int, bool
+deleted := eval.Actions.Delete.Fired()      // bool
 ```
-
-## Type Parameters
-
-The engine uses two type parameters:
-
-- **`T`** — the environment type. Expressions are compiled and evaluated
-  against `T`. Flows from compilation through to execution.
-- **`V`** — the vars type. Domain-specific context passed to handlers
-  (DB connections, API clients, etc.). Only appears at the engine and
-  handler boundary.
-
-If you don't need handler vars, use `struct{}`.
 
 ## Actions
 
-Actions are the things rules do. They are registered on a `Registry`
-by the domain layer — the engine has no built-in actions.
+Actions are declared as fields on a struct. Each field is an
+`Action[T, E]` where `T` is the value type and `E` is the environment
+type. The `rule` struct tag configures the action name and options.
 
-```go
-rules.WithAction("label",    rules.Multi,  rules.StringExpr, false)
-rules.WithAction("archive",  rules.Single, rules.NoValue,    true)  // terminal
-rules.WithAction("read",     rules.Single, rules.BoolValue,  false)
-```
+### Supported Types
+
+Action values are constrained by the `Actionable` interface, mapping
+to JSON primitives:
+
+| Type | Go type | Example value |
+|------|---------|---------------|
+| String | `Action[string, E]` | `"billing"` |
+| Boolean | `Action[bool, E]` | `true` |
+| Integer | `Action[int, E]` | `42` |
+| Float | `Action[float64, E]` | `0.95` |
+| Presence | `Action[NoArgs, E]` | `NoArgs{}` |
 
 ### Cardinality
 
-- **Multi** — may appear multiple times, accumulates across rules, duplicates stripped.
-- **Single** — at most once per rule, last-wins across rules.
+- **Single** (default) — at most once per rule. Across rules, last
+  match wins.
+- **Multi** (`rule:"name,multi"`) — accumulates across rules,
+  duplicates stripped.
 
-### Value Kinds
+### Terminal
 
-| Kind | Description |
-|------|-------------|
-| `NoValue` | No value (e.g. delete, archive) |
-| `BoolValue` | Bool literal (e.g. read: true) |
-| `StringVal` | Static string |
-| `StringExpr` | Expression evaluated against `T` at runtime |
+An action marked `rule:"name,terminal"` halts evaluation when
+triggered. At most one terminal action per struct, enforced by
+`DefineActions`. Terminal implies stop.
 
-### Terminal Actions
+## Typed Accessors
 
-A terminal action halts rule evaluation. A rule may contain at most one
-terminal action, enforced at compile time. Accumulated actions from
-earlier rules still resolve.
-
-## Handlers
-
-Handlers are functions executed after rule evaluation. They receive a
-typed `Context[T, V]` with the environment, resolved actions, and vars:
+Every `Action[T, E]` field exposes typed methods on the evaluation
+result:
 
 ```go
-handler := func(ctx *rules.Context[Message, MailVars]) error {
-    // ctx.Env — the message being evaluated
-    // ctx.Actions — all resolved actions
-    // ctx.Vars — domain-specific dependencies
-    return nil
-}
+// Resolved values.
+eval.Actions.Label.Value()       // (T, bool) — last value, ok
+eval.Actions.Label.Values()      // []T — all values (deduped for Multi)
+eval.Actions.Label.Fired()       // bool — was it triggered?
 
-reg, _ := rules.NewRegistry(
-    rules.WithHandler("process-invoice", handler, rules.Multi, false),
+// Provenance — which rules contributed.
+eval.Actions.Label.ByRule("invoices")  // []T — values from that rule
+eval.Actions.Label.ByTag("billing")    // []T — values from rules with that tag
+eval.Actions.Label.Rules()             // []string — rule names, deduped
+```
+
+## Compile-Time Validation
+
+`Compile` validates everything upfront:
+
+- Duplicate rule names
+- Expression parse/type errors (the `when` clause)
+- Unknown action names
+- Value type mismatches (`"banana"` for a `bool` action)
+- Single-cardinality action used multiple times in one rule
+- Multiple terminal actions in one rule
+
+## Selectors
+
+Filter which rules evaluate, at the evaluator level or per-call:
+
+```go
+// Evaluator-level defaults — applied to every Run.
+evaluator, _ := rules.NewEvaluator(actions, rs,
+    rules.OnEvaluation(
+        rules.WithTags("billing"),
+    ),
+)
+
+// Per-call — additive with evaluator defaults.
+eval, _ := evaluator.Run(ctx, email,
+    rules.ExcludeTags("archived"),
 )
 ```
 
-Handler errors don't abort execution — all errors are collected and
-returned via `errors.Join`. The result is always populated.
-
-## Compilation
-
-`Compile` validates everything at compile time:
-
-- Duplicate rule names
-- Unknown action/handler references
-- Expression parse and type errors
-- Cardinality violations (single-use action repeated)
-- Multiple terminal actions in one rule
-- Value type mismatches
-
-```go
-rs, err := rules.Compile(reg, compiler, defs)
-// err catches all of the above
-```
+Options: `WithTags`, `WithNames`, `ExcludeTags`, `ExcludeNames`.
 
 ## Rule Definitions
 
-Definitions are plain structs — construct them however you like (YAML,
-JSON, database, code):
+Definitions are plain structs — build them from YAML, JSON, a database,
+or code:
 
 ```go
 rules.Definition{
     Name:    "my-rule",
     Tags:    []string{"billing", "receipts"},
-    Enabled: nil,         // nil = enabled (default)
-    Stop:    false,        // halt evaluation after this rule
+    Enabled: nil,          // nil = enabled (default)
+    Stop:    false,         // halt evaluation after this rule
     When:    `has(Subject, "invoice")`,
     Then:    []rules.ActionEntry{
         {Name: "label", Value: "billing"},
@@ -148,17 +173,8 @@ rules.Definition{
 }
 ```
 
-## Selectors
-
-Filter which rules execute at engine construction or per-execution:
-
-```go
-// Engine-level: only run rules tagged "billing".
-engine, _ := rules.NewEngine[T, V](reg, rs, rules.WithTags("billing"))
-
-// Per-execution: additionally exclude "archived" rules.
-result, _ := engine.Run(ctx, env, vars, rules.ExcludeTags("archived"))
-```
+`ActionEntry.Value` is `any` — the type is checked against the action's
+constraint at compile time.
 
 ## Merging Rulesets
 
@@ -171,14 +187,6 @@ merged, err := base.Merge(overrides, rules.AllowOverride)
 - Default: name collision returns an error.
 - `AllowOverride`: the second ruleset's rule replaces the first's,
   keeping the original's position in evaluation order.
-
-## DryRun
-
-Preview which rules would match without executing handlers:
-
-```go
-result, _ := engine.DryRun(ctx, env, struct{}{})
-```
 
 ## License
 

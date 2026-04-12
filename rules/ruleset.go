@@ -2,235 +2,148 @@ package rules
 
 import (
 	"fmt"
-	"strconv"
 
 	"github.com/rhyselsmore/anyexpr"
 )
 
-type compiledRule[T any] struct {
-	def     Definition
-	matcher *anyexpr.Program[T]
-	actions []compiledAction[T]
+type compiledRule[E any] struct {
+	name    string
+	tags    []string
+	enabled *bool
 	stop    bool
+	matcher *anyexpr.Program[E]
+	actions []actionValuer[E]
 }
 
-type compiledAction[T any] struct {
-	def       Def
-	valueExpr *anyexpr.Program[T] // nil if static or no value
-	static    string
-	boolVal   *bool
+// Ruleset holds compiled rules ready for evaluation.
+type Ruleset[E any] struct {
+	rules []compiledRule[E]
 }
 
-// Ruleset is a compiled, immutable collection of rules. It is
-// parameterised on T only — expression compilation and action
-// validation do not need V.
-type Ruleset[T any] struct {
-	rules []compiledRule[T]
-}
-
-// Compile compiles a slice of definitions into a Ruleset. It validates
-// all expressions, action references, cardinality constraints, and value
-// types at compile time.
-func Compile[T any](
-	reg *Registry,
-	compiler *anyexpr.Compiler[T],
+// Compile validates and compiles rule definitions against the action
+// schema and expression compiler. Action names in definitions are
+// checked against the defined actions. Values are type-checked against
+// the action's Actionable constraint. Expressions are compiled via the
+// anyexpr compiler.
+func Compile[A, E any](
+	actions *Actions[A, E],
+	compiler *anyexpr.Compiler[E],
 	defs []Definition,
 	opts ...CompileOpt,
-) (*Ruleset[T], error) {
-	_ = opts // reserved
-
-	// Check for duplicate rule names.
-	seen := make(map[string]bool, len(defs))
-	for _, d := range defs {
-		if d.Name == "" {
-			continue
-		}
-		if seen[d.Name] {
-			return nil, fmt.Errorf("%w: %q", ErrDuplicateRule, d.Name)
-		}
-		seen[d.Name] = true
+) (*Ruleset[E], error) {
+	if !actions.defined {
+		return nil, ErrNotDefined
 	}
 
-	compiled := make([]compiledRule[T], 0, len(defs))
+	seen := make(map[string]bool)
+	compiled := make([]compiledRule[E], 0, len(defs))
 
-	for _, d := range defs {
-		// Compile the when expression.
-		matcher, err := compiler.Compile(anyexpr.NewSource(d.Name, d.When))
+	for _, def := range defs {
+		if seen[def.Name] {
+			return nil, fmt.Errorf("%w: %q", ErrDuplicateRule, def.Name)
+		}
+		seen[def.Name] = true
+
+		prog, err := compiler.Compile(anyexpr.NewSource(def.Name, def.When))
 		if err != nil {
-			return nil, fmt.Errorf("%w: rule %q: %v", ErrCompile, d.Name, err)
+			return nil, fmt.Errorf("%w: rule %q: %v", ErrCompile, def.Name, err)
 		}
 
-		// Compile actions.
-		var actions []compiledAction[T]
-		var actionDefs []Def
-
-		for _, ae := range d.Then {
-			def, ok := reg.LookupAction(ae.Name)
-			if !ok {
-				return nil, fmt.Errorf("%w: %q in rule %q", ErrUnknownAction, ae.Name, d.Name)
-			}
-
-			ca := compiledAction[T]{def: def}
-
-			if def.IsHandler {
-				// Verify handler exists.
-				if _, ok := reg.LookupHandler(ae.Name); !ok {
-					return nil, fmt.Errorf("%w: %q in rule %q", ErrUnknownHandler, ae.Name, d.Name)
-				}
-				actions = append(actions, ca)
-				actionDefs = append(actionDefs, def)
-				continue
-			}
-
-			// Validate and compile value based on ValueKind.
-			switch def.Value {
-			case NoValue:
-				if ae.Value != "" {
-					return nil, fmt.Errorf("%w: action %q in rule %q expects no value, got %q",
-						ErrValueType, ae.Name, d.Name, ae.Value)
-				}
-			case BoolValue:
-				b, err := strconv.ParseBool(ae.Value)
-				if err != nil {
-					return nil, fmt.Errorf("%w: action %q in rule %q: %q is not a valid bool",
-						ErrValueType, ae.Name, d.Name, ae.Value)
-				}
-				ca.boolVal = &b
-			case StringVal:
-				ca.static = ae.Value
-			case StringExpr:
-				if ae.Value == "" {
-					ca.static = ""
-				} else {
-					prog, err := compiler.Compile(
-						anyexpr.NewSource(d.Name+"/"+ae.Name, ae.Value))
-					if err != nil {
-						return nil, fmt.Errorf("%w: rule %q action %q value: %v",
-							ErrCompile, d.Name, ae.Name, err)
-					}
-					ca.valueExpr = prog
-				}
-			}
-
-			actions = append(actions, ca)
-			actionDefs = append(actionDefs, def)
+		cas, hasTerminal, err := compileRuleActions(actions, def)
+		if err != nil {
+			return nil, err
 		}
 
-		// Validate action constraints for this rule.
-		if err := ValidateActions(actionDefs); err != nil {
-			return nil, fmt.Errorf("rule %q: %w", d.Name, err)
-		}
-
-		// Determine if this rule should stop evaluation.
-		hasTerminal := false
-		for _, ad := range actionDefs {
-			if ad.Terminal {
-				hasTerminal = true
-				break
-			}
-		}
-
-		compiled = append(compiled, compiledRule[T]{
-			def:     d,
-			matcher: matcher,
-			actions: actions,
-			stop:    d.Stop || hasTerminal,
+		compiled = append(compiled, compiledRule[E]{
+			name:    def.Name,
+			tags:    def.Tags,
+			enabled: def.Enabled,
+			stop:    def.Stop || hasTerminal,
+			matcher: prog,
+			actions: cas,
 		})
 	}
 
-	return &Ruleset[T]{rules: compiled}, nil
+	return &Ruleset[E]{rules: compiled}, nil
 }
 
-// Names returns the names of all rules in evaluation order.
-func (rs *Ruleset[T]) Names() []string {
+func compileRuleActions[A, E any](actions *Actions[A, E], def Definition) ([]actionValuer[E], bool, error) {
+	cas := make([]actionValuer[E], 0, len(def.Then))
+	seenSingle := make(map[string]bool)
+	terminalCount := 0
+	hasTerminal := false
+
+	for _, ae := range def.Then {
+		af, ok := actions.compilers[ae.Name]
+		if !ok {
+			return nil, false, fmt.Errorf("%w: rule %q references %q", ErrUnknownAction, def.Name, ae.Name)
+		}
+
+		av, err := af.compile(ae.Value)
+		if err != nil {
+			return nil, false, err
+		}
+
+		if av.actionCardinality() == Single && seenSingle[ae.Name] {
+			return nil, false, fmt.Errorf("%w: rule %q uses %q multiple times", ErrCardinalityViolation, def.Name, ae.Name)
+		}
+		seenSingle[ae.Name] = true
+
+		if av.actionTerminal() {
+			terminalCount++
+			if terminalCount > 1 {
+				return nil, false, fmt.Errorf("%w: rule %q", ErrMultipleTerminals, def.Name)
+			}
+			hasTerminal = true
+		}
+
+		cas = append(cas, av)
+	}
+
+	return cas, hasTerminal, nil
+}
+
+// Names returns all rule names in evaluation order.
+func (rs *Ruleset[E]) Names() []string {
 	names := make([]string, len(rs.rules))
 	for i, r := range rs.rules {
-		names[i] = r.def.Name
+		names[i] = r.name
 	}
 	return names
 }
 
-// Tags returns the unique set of tags across all rules.
-func (rs *Ruleset[T]) Tags() []string {
-	seen := make(map[string]bool)
-	var tags []string
-	for _, r := range rs.rules {
-		for _, t := range r.def.Tags {
-			if !seen[t] {
-				seen[t] = true
-				tags = append(tags, t)
-			}
-		}
-	}
-	return tags
-}
-
-// Len returns the number of compiled rules.
-func (rs *Ruleset[T]) Len() int {
+// Len returns the number of rules.
+func (rs *Ruleset[E]) Len() int {
 	return len(rs.rules)
 }
 
-// MergeOpt controls merge behaviour.
-type MergeOpt int
-
-// AllowOverride allows the second ruleset's rules to replace the first's
-// when names collide, keeping the original's position in evaluation order.
-const AllowOverride MergeOpt = 1
-
-// Merge combines two rulesets into a new one. Neither input is modified.
-//
-// By default, name collisions return ErrNameCollision. With AllowOverride,
-// the second ruleset's rule replaces the first's at the original position.
-// Remaining rules from the second are appended.
-func (rs *Ruleset[T]) Merge(other *Ruleset[T], opts ...MergeOpt) (*Ruleset[T], error) {
-	allowOverride := false
+// Merge combines two rulesets. By default, name collisions return an
+// error. Use AllowOverride to let the second ruleset replace colliding
+// rules while keeping the original's position in evaluation order.
+func (rs *Ruleset[E]) Merge(other *Ruleset[E], opts ...MergeOpt) (*Ruleset[E], error) {
+	cfg := &mergeConfig{}
 	for _, o := range opts {
-		if o == AllowOverride {
-			allowOverride = true
-		}
+		o(cfg)
 	}
 
-	// Index the other ruleset by name.
-	otherByName := make(map[string]compiledRule[T])
+	nameIdx := make(map[string]int, len(rs.rules))
+	for i, r := range rs.rules {
+		nameIdx[r.name] = i
+	}
+
+	merged := make([]compiledRule[E], len(rs.rules))
+	copy(merged, rs.rules)
+
 	for _, r := range other.rules {
-		if r.def.Name != "" {
-			otherByName[r.def.Name] = r
-		}
-	}
-
-	// Check for collisions.
-	if !allowOverride {
-		for _, r := range rs.rules {
-			if r.def.Name == "" {
-				continue
+		if idx, exists := nameIdx[r.name]; exists {
+			if !cfg.allowOverride {
+				return nil, fmt.Errorf("%w: %q", ErrNameCollision, r.name)
 			}
-			if _, exists := otherByName[r.def.Name]; exists {
-				return nil, fmt.Errorf("%w: %q", ErrNameCollision, r.def.Name)
-			}
-		}
-	}
-
-	// Build merged rules.
-	usedFromOther := make(map[string]bool)
-	var merged []compiledRule[T]
-
-	for _, r := range rs.rules {
-		if r.def.Name != "" {
-			if override, exists := otherByName[r.def.Name]; exists {
-				merged = append(merged, override)
-				usedFromOther[r.def.Name] = true
-				continue
-			}
-		}
-		merged = append(merged, r)
-	}
-
-	// Append remaining rules from other.
-	for _, r := range other.rules {
-		if r.def.Name == "" || !usedFromOther[r.def.Name] {
+			merged[idx] = r
+		} else {
 			merged = append(merged, r)
 		}
 	}
 
-	return &Ruleset[T]{rules: merged}, nil
+	return &Ruleset[E]{rules: merged}, nil
 }

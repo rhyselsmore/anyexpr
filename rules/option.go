@@ -1,53 +1,78 @@
 package rules
 
-import "fmt"
+// --- Evaluator options ---
 
-// --- Registry options ---
+// EvaluatorOpt configures an Evaluator.
+type EvaluatorOpt func(*evaluatorConfig)
 
-// RegistryOpt configures a Registry.
-type RegistryOpt func(*registryConfig) error
-
-type registryConfig struct {
-	actions  map[string]Def
-	handlers map[string]any
+type evaluatorConfig struct {
+	evalDefaults evaluationConfig
 }
 
-// WithAction registers a named action type on the registry.
-func WithAction(name string, c Cardinality, v ValueKind, terminal bool) RegistryOpt {
-	return func(cfg *registryConfig) error {
-		if _, exists := cfg.actions[name]; exists {
-			return fmt.Errorf("%w: %q", ErrDuplicateRegistration, name)
+// OnEvaluation sets default evaluation options applied to every Run
+// call. Per-call options passed to Run clobber these defaults.
+func OnEvaluation(opts ...EvaluationOpt) EvaluatorOpt {
+	return func(cfg *evaluatorConfig) {
+		for _, o := range opts {
+			o(&cfg.evalDefaults)
 		}
-		cfg.actions[name] = Def{
-			Name:        name,
-			Terminal:    terminal,
-			Cardinality: c,
-			Value:       v,
-		}
-		return nil
 	}
 }
 
-// WithHandler registers a named handler on the registry. The handler
-// function is stored type-erased. The Engine[T, V] constructor
-// type-asserts it at build time against func(*Context[T, V]) error.
-func WithHandler(name string, h any, c Cardinality, terminal bool) RegistryOpt {
-	return func(cfg *registryConfig) error {
-		if _, exists := cfg.actions[name]; exists {
-			return fmt.Errorf("%w: %q", ErrDuplicateRegistration, name)
+// --- Evaluation options ---
+
+// EvaluationOpt configures a single evaluation (Run call).
+type EvaluationOpt func(*evaluationConfig)
+
+type evaluationConfig struct {
+	sel selector
+}
+
+// WithTags limits evaluation to rules with at least one matching tag.
+func WithTags(tags ...string) EvaluationOpt {
+	return func(cfg *evaluationConfig) {
+		if cfg.sel.onlyTags == nil {
+			cfg.sel.onlyTags = make(map[string]bool)
 		}
-		if _, exists := cfg.handlers[name]; exists {
-			return fmt.Errorf("%w: %q", ErrDuplicateRegistration, name)
+		for _, t := range tags {
+			cfg.sel.onlyTags[t] = true
 		}
-		cfg.actions[name] = Def{
-			Name:        name,
-			Terminal:    terminal,
-			Cardinality: c,
-			Value:       NoValue,
-			IsHandler:   true,
+	}
+}
+
+// WithNames limits evaluation to rules with matching names.
+func WithNames(names ...string) EvaluationOpt {
+	return func(cfg *evaluationConfig) {
+		if cfg.sel.onlyNames == nil {
+			cfg.sel.onlyNames = make(map[string]bool)
 		}
-		cfg.handlers[name] = h
-		return nil
+		for _, n := range names {
+			cfg.sel.onlyNames[n] = true
+		}
+	}
+}
+
+// ExcludeTags excludes rules with any of the given tags.
+func ExcludeTags(tags ...string) EvaluationOpt {
+	return func(cfg *evaluationConfig) {
+		if cfg.sel.excludeTags == nil {
+			cfg.sel.excludeTags = make(map[string]bool)
+		}
+		for _, t := range tags {
+			cfg.sel.excludeTags[t] = true
+		}
+	}
+}
+
+// ExcludeNames excludes rules with any of the given names.
+func ExcludeNames(names ...string) EvaluationOpt {
+	return func(cfg *evaluationConfig) {
+		if cfg.sel.excludeNames == nil {
+			cfg.sel.excludeNames = make(map[string]bool)
+		}
+		for _, n := range names {
+			cfg.sel.excludeNames[n] = true
+		}
 	}
 }
 
@@ -58,116 +83,15 @@ type CompileOpt func(*compileConfig)
 
 type compileConfig struct{}
 
-// --- Engine options ---
+// --- Merge options ---
 
-// EngineOpt configures an Engine.
-type EngineOpt func(*engineConfig)
+// MergeOpt configures a Merge call.
+type MergeOpt func(*mergeConfig)
 
-type engineConfig struct {
-	sel selector
+type mergeConfig struct {
+	allowOverride bool
 }
 
-// WithTags limits the engine to rules with at least one matching tag.
-func WithTags(tags ...string) EngineOpt {
-	return func(cfg *engineConfig) {
-		if cfg.sel.onlyTags == nil {
-			cfg.sel.onlyTags = make(map[string]bool)
-		}
-		for _, t := range tags {
-			cfg.sel.onlyTags[t] = true
-		}
-	}
-}
-
-// WithNames limits the engine to rules with matching names.
-func WithNames(names ...string) EngineOpt {
-	return func(cfg *engineConfig) {
-		if cfg.sel.onlyNames == nil {
-			cfg.sel.onlyNames = make(map[string]bool)
-		}
-		for _, n := range names {
-			cfg.sel.onlyNames[n] = true
-		}
-	}
-}
-
-// WithExcludeTags excludes rules with any of the given tags.
-func WithExcludeTags(tags ...string) EngineOpt {
-	return func(cfg *engineConfig) {
-		if cfg.sel.excludeTags == nil {
-			cfg.sel.excludeTags = make(map[string]bool)
-		}
-		for _, t := range tags {
-			cfg.sel.excludeTags[t] = true
-		}
-	}
-}
-
-// WithExcludeNames excludes rules with any of the given names.
-func WithExcludeNames(names ...string) EngineOpt {
-	return func(cfg *engineConfig) {
-		if cfg.sel.excludeNames == nil {
-			cfg.sel.excludeNames = make(map[string]bool)
-		}
-		for _, n := range names {
-			cfg.sel.excludeNames[n] = true
-		}
-	}
-}
-
-// --- Run options ---
-
-// RunOpt configures a single Run or DryRun call.
-type RunOpt func(*runConfig)
-
-type runConfig struct {
-	sel selector
-}
-
-// OnlyTags limits this execution to rules with at least one matching tag.
-func OnlyTags(tags ...string) RunOpt {
-	return func(cfg *runConfig) {
-		if cfg.sel.onlyTags == nil {
-			cfg.sel.onlyTags = make(map[string]bool)
-		}
-		for _, t := range tags {
-			cfg.sel.onlyTags[t] = true
-		}
-	}
-}
-
-// OnlyNames limits this execution to rules with matching names.
-func OnlyNames(names ...string) RunOpt {
-	return func(cfg *runConfig) {
-		if cfg.sel.onlyNames == nil {
-			cfg.sel.onlyNames = make(map[string]bool)
-		}
-		for _, n := range names {
-			cfg.sel.onlyNames[n] = true
-		}
-	}
-}
-
-// ExcludeTags excludes rules with any of the given tags for this execution.
-func ExcludeTags(tags ...string) RunOpt {
-	return func(cfg *runConfig) {
-		if cfg.sel.excludeTags == nil {
-			cfg.sel.excludeTags = make(map[string]bool)
-		}
-		for _, t := range tags {
-			cfg.sel.excludeTags[t] = true
-		}
-	}
-}
-
-// ExcludeNames excludes rules with any of the given names for this execution.
-func ExcludeNames(names ...string) RunOpt {
-	return func(cfg *runConfig) {
-		if cfg.sel.excludeNames == nil {
-			cfg.sel.excludeNames = make(map[string]bool)
-		}
-		for _, n := range names {
-			cfg.sel.excludeNames[n] = true
-		}
-	}
-}
+// AllowOverride permits the second ruleset to replace rules with
+// colliding names, keeping the original's position in evaluation order.
+var AllowOverride MergeOpt = func(cfg *mergeConfig) { cfg.allowOverride = true }
