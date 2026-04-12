@@ -151,8 +151,12 @@ err := compiler.Check([]*anyexpr.Source{
 ## Rules Engine
 
 The [anyexpr/rules](rules/) subpackage builds on top of anyexpr with a
-when/then rule evaluation engine — register domain-specific actions,
-compile rule definitions, and evaluate them against your environment type.
+typed when/then rule evaluation engine. Define actions as a struct with
+generic fields, compile rule definitions with type-checked values, and
+evaluate them against your environment type — results are accessed
+through typed struct fields, not string keys.
+
+See the [rules README](rules/README.md) for full documentation.
 
 ## Acknowledgements
 
