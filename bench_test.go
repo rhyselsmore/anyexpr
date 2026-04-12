@@ -72,7 +72,7 @@ func BenchmarkEval_Extract(b *testing.B) {
 
 func BenchmarkEval_Domain(b *testing.B) {
 	c, _ := NewCompiler[benchEnv]()
-	prog, _ := c.Compile(NewSource("bench", `domain(Email)`))
+	prog, _ := c.Compile(NewSource("bench", `email_domain(Email)`))
 	e := benchEnv{Email: "alice@example.com"}
 
 	b.ResetTimer()

@@ -75,7 +75,7 @@ matched, err := prog.Match(Email{
   generics (`Compiler[T]`, `Program[T]`) so the environment type flows
   through your Go code as well — no `any` casts or manual `expr.Env()` calls.
 - **Built-in functions** — `has`, `starts`, `ends`, `eq`, `re`, `glob`,
-  `extract`, `domain`, and more. Case-insensitive by default, with `x`-prefixed
+  `extract`, `email_domain`, and more. Case-insensitive by default, with `x`-prefixed
   case-sensitive variants (`xhas`, `xstarts`, etc.).
 - **Compile once, run many** — compiled programs are immutable and safe
   for concurrent use across goroutines.
@@ -106,7 +106,7 @@ matched, err := prog.Match(Email{
 | `words` | `(s) []string` | Split on whitespace |
 | `lines` | `(s) []string` | Split on newlines |
 | `extract` | `(s, pattern) string` | First regex match |
-| `domain` | `(addr) string` | Domain from email address |
+| `email_domain` | `(addr) string` | Domain from email address |
 | `len` | `(v) int` | Length of string, array, slice, or map |
 
 See [doc/reference.md](doc/reference.md) for full documentation and examples.
@@ -132,7 +132,7 @@ compiler, err := anyexpr.NewCompiler[MyEnv](
 
 ```go
 prog, _ := compiler.Compile(
-    anyexpr.NewSource("get-domain", `domain(Email)`))
+    anyexpr.NewSource("get-domain", `email_domain(Email)`))
 
 result, err := prog.Eval(env) // result is "example.com"
 ```

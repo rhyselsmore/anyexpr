@@ -99,7 +99,7 @@ func defaultBuiltinOpts() []expr.Option {
 
 		// Extraction
 		wrapString2("extract", biExtract),
-		wrapString1("domain", biDomain),
+		wrapString1("email_domain", biDomain),
 	}
 }
 
@@ -115,7 +115,7 @@ func builtinOptsByName() map[string]expr.Option {
 		"lower": wrapString1("lower", biLower), "upper": wrapString1("upper", biUpper),
 		"trim": wrapString1("trim", biTrim),
 		"words": wrapStrings1("words", biWords), "lines": wrapStrings1("lines", biLines),
-		"extract": wrapString2("extract", biExtract), "domain": wrapString1("domain", biDomain),
+		"extract": wrapString2("extract", biExtract), "email_domain": wrapString1("email_domain", biDomain),
 	}
 }
 

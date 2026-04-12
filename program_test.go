@@ -282,7 +282,7 @@ func TestIntegration_Domain(t *testing.T) {
 	type env struct{ Email string }
 	c, _ := NewCompiler[env]()
 
-	prog, _ := c.Compile(NewSource("domain", `domain(Email)`))
+	prog, _ := c.Compile(NewSource("email_domain", `email_domain(Email)`))
 	out, err := prog.Eval(env{"user@example.com"})
 	if err != nil {
 		t.Fatal(err)

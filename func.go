@@ -15,7 +15,7 @@ func builtinNames() map[string]bool {
 		"re": true, "xre": true, "glob": true,
 		"lower": true, "upper": true, "trim": true,
 		"words": true, "lines": true,
-		"extract": true, "domain": true,
+		"extract": true, "email_domain": true,
 	}
 }
 

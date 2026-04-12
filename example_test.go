@@ -53,7 +53,7 @@ func Example_eval() {
 	}
 
 	prog, err := compiler.Compile(
-		anyexpr.NewSource("extract-domain", `domain(Email)`))
+		anyexpr.NewSource("extract-domain", `email_domain(Email)`))
 	if err != nil {
 		log.Fatal(err)
 	}

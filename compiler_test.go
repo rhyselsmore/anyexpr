@@ -194,7 +194,7 @@ func TestCompile_AllBuiltins(t *testing.T) {
 		{"upper", `upper(Name) == "X"`},
 		{"trim", `trim(Name) == "x"`},
 		{"extract", `extract(Name, "x") == "x"`},
-		{"domain", `domain(Email) == "x"`},
+		{"email_domain", `email_domain(Email) == "x"`},
 	}
 
 	for _, tt := range exprs {

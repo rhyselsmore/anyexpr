@@ -182,13 +182,13 @@ extract(Body, "INV-\\d+")       // "INV-123" from "See INV-123"
 extract(Log, "error: .+")       // first error line
 ```
 
-### `domain(addr) string`
+### `email_domain(addr) string`
 
 Returns the domain portion of an email address (everything after the
 last `@`). Returns `""` if there is no `@`.
 
 ```
-domain(Email)                   // "example.com" from "alice@example.com"
+email_domain(Email)             // "example.com" from "alice@example.com"
 ```
 
 ---
