@@ -1,12 +1,25 @@
 # anyexpr
 
-A generic expression compilation and evaluation library for Go.
+A generic expression compilation and evaluation library for Go, built on
+[expr-lang](https://expr-lang.org).
 
-anyexpr wraps [expr-lang](https://expr-lang.org) with a typed compiler,
-a library of built-in string and pattern matching functions, and a
-compile-once-run-many execution model. It's designed for systems that
-evaluate user-authored filter expressions, routing rules, or matching
-logic against structured data.
+## Why anyexpr?
+
+[expr-lang](https://expr-lang.org) is a powerful, fast, and safe expression
+language for Go — it provides the parser, compiler, and virtual machine that
+make expression evaluation possible. anyexpr doesn't replace any of that.
+
+What anyexpr adds is an opinionated workflow on top: a typed generic compiler,
+a library of common string and pattern matching functions, named expression
+sources, and a compile-once-run-many execution model. It's designed to reduce
+the boilerplate when you need to build an end-to-end pipeline for evaluating
+user-authored filter expressions, routing rules, or matching logic against
+structured data.
+
+If you need a Go expression language, use [expr-lang](https://expr-lang.org).
+If you're building a system where users write filter/match expressions and
+you want a batteries-included workflow around compilation, validation, and
+evaluation — anyexpr provides that layer.
 
 ## Install
 
@@ -133,6 +146,14 @@ err := compiler.Check([]*anyexpr.Source{
 The [anyexpr/rules](rules/) subpackage builds on top of anyexpr with a
 when/then rule evaluation engine — register domain-specific actions,
 compile rule definitions, and evaluate them against your environment type.
+
+## Acknowledgements
+
+anyexpr is built entirely on [expr-lang](https://expr-lang.org) by
+[Anton Medvedev](https://github.com/antonmedv). All expression parsing,
+compilation, and evaluation is handled by expr — anyexpr is a convenience
+layer on top. If you find this library useful, check out
+[expr-lang](https://github.com/expr-lang/expr) and consider giving it a star.
 
 ## License
 
