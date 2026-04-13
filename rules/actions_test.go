@@ -3,103 +3,51 @@ package rules
 import (
 	"errors"
 	"testing"
+
+	"github.com/rhyselsmore/anyexpr/rules2/action"
 )
 
-// Test env type — used as E parameter.
-type testEnv struct{ Name string }
+// --- Test types ---
 
-// Test actions struct — generic on E.
-type testActions[E any] struct {
-	Label    Action[string, E]  `rule:"label,multi"`
-	Read     Action[bool, E]    `rule:"read"`
-	Move     Action[string, E]  `rule:"move"`
-	Priority Action[int, E]     `rule:"priority"`
-	Score    Action[float64, E] `rule:"score"`
-	Delete   Action[NoArgs, E]  `rule:"delete,terminal"`
+type testEnv struct {
+	Name   string
+	Amount float64
+	Active bool
 }
+
+type testActions[E any] struct {
+	Label    Action[string, E]       `rule:"label,multi" description:"categorisation labels"`
+	Move     Action[string, E]       `rule:"move"`
+	Read     Action[bool, E]         `rule:"read"`
+	Priority Action[int, E]          `rule:"priority"`
+	Score    Action[float64, E]      `rule:"score"`
+	Delete   Action[action.NoArgs, E] `rule:"delete,terminal"`
+}
+
+func defineTestActions(t *testing.T) *Actions[testEnv, testActions[testEnv]] {
+	t.Helper()
+	actions, err := DefineActions[testEnv, testActions[testEnv]]()
+	if err != nil {
+		t.Fatalf("DefineActions: %v", err)
+	}
+	return actions
+}
+
+// --- DefineActions ---
 
 func TestDefineActions_Valid(t *testing.T) {
 	t.Parallel()
-	actions, err := DefineActions[testActions[testEnv], testEnv]()
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	actions := defineTestActions(t)
+	if actions.IsZero() {
+		t.Fatal("expected defined")
 	}
-	if !actions.defined {
-		t.Fatal("expected defined to be true")
-	}
+}
+
+func TestDefineActions_FieldCount(t *testing.T) {
+	t.Parallel()
+	actions := defineTestActions(t)
 	if len(actions.fields) != 6 {
-		t.Fatalf("expected 6 fields, got %d", len(actions.fields))
-	}
-}
-
-func TestDefineActions_FieldsConfigured(t *testing.T) {
-	t.Parallel()
-	actions, err := DefineActions[testActions[testEnv], testEnv]()
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	schema := actions.schema
-	checks := []struct {
-		name        string
-		cardinality Cardinality
-		terminal    bool
-	}{
-		{"label", Multi, false},
-		{"read", Single, false},
-		{"move", Single, false},
-		{"priority", Single, false},
-		{"score", Single, false},
-		{"delete", Single, true},
-	}
-
-	_ = schema
-	for _, tt := range checks {
-		af, ok := actions.compilers[tt.name]
-		if !ok {
-			t.Errorf("action %q not found in compilers", tt.name)
-			continue
-		}
-		// Compile with a dummy value to get metadata via the actionValuer.
-		var av actionValuer[testEnv]
-		var err error
-		switch tt.name {
-		case "label", "move":
-			av, err = af.compile("test")
-		case "read":
-			av, err = af.compile(true)
-		case "priority":
-			av, err = af.compile(1)
-		case "score":
-			av, err = af.compile(1.0)
-		case "delete":
-			av, err = af.compile(NoArgs{})
-		}
-		if err != nil {
-			t.Errorf("action %q: compile error: %v", tt.name, err)
-			continue
-		}
-		if av.actionCardinality() != tt.cardinality {
-			t.Errorf("action %q: cardinality = %v, want %v", tt.name, av.actionCardinality(), tt.cardinality)
-		}
-		if av.actionTerminal() != tt.terminal {
-			t.Errorf("action %q: terminal = %v, want %v", tt.name, av.actionTerminal(), tt.terminal)
-		}
-	}
-}
-
-func TestDefineActions_SchemaConfigured(t *testing.T) {
-	t.Parallel()
-	actions, err := DefineActions[testActions[testEnv], testEnv]()
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if actions.schema.Label.Name() != "label" {
-		t.Errorf("Label.Name() = %q, want %q", actions.schema.Label.Name(), "label")
-	}
-	if actions.schema.Delete.Name() != "delete" {
-		t.Errorf("Delete.Name() = %q, want %q", actions.schema.Delete.Name(), "delete")
+		t.Errorf("got %d fields, want 6", len(actions.fields))
 	}
 }
 
@@ -109,7 +57,7 @@ func TestDefineActions_DuplicateNames(t *testing.T) {
 		A Action[string, E] `rule:"same"`
 		B Action[string, E] `rule:"same"`
 	}
-	_, err := DefineActions[bad[testEnv], testEnv]()
+	_, err := DefineActions[testEnv, bad[testEnv]]()
 	if !errors.Is(err, ErrDuplicateRegistration) {
 		t.Errorf("got %v, want ErrDuplicateRegistration", err)
 	}
@@ -121,18 +69,7 @@ func TestDefineActions_MissingTag(t *testing.T) {
 		A Action[string, E] `rule:"ok"`
 		B Action[string, E] // no tag
 	}
-	_, err := DefineActions[bad[testEnv], testEnv]()
-	if !errors.Is(err, ErrDefine) {
-		t.Errorf("got %v, want ErrDefine", err)
-	}
-}
-
-func TestDefineActions_InvalidName(t *testing.T) {
-	t.Parallel()
-	type bad[E any] struct {
-		A Action[string, E] `rule:"123invalid"`
-	}
-	_, err := DefineActions[bad[testEnv], testEnv]()
+	_, err := DefineActions[testEnv, bad[testEnv]]()
 	if !errors.Is(err, ErrDefine) {
 		t.Errorf("got %v, want ErrDefine", err)
 	}
@@ -143,30 +80,18 @@ func TestDefineActions_EmptyTag(t *testing.T) {
 	type bad[E any] struct {
 		A Action[string, E] `rule:""`
 	}
-	_, err := DefineActions[bad[testEnv], testEnv]()
+	_, err := DefineActions[testEnv, bad[testEnv]]()
 	if !errors.Is(err, ErrDefine) {
 		t.Errorf("got %v, want ErrDefine", err)
 	}
 }
 
-func TestDefineActions_MultipleTerminals(t *testing.T) {
+func TestDefineActions_InvalidTagOption(t *testing.T) {
 	t.Parallel()
 	type bad[E any] struct {
-		A Action[NoArgs, E] `rule:"a,terminal"`
-		B Action[NoArgs, E] `rule:"b,terminal"`
+		A Action[string, E] `rule:"ok,bogus"`
 	}
-	_, err := DefineActions[bad[testEnv], testEnv]()
-	if !errors.Is(err, ErrMultipleTerminals) {
-		t.Errorf("got %v, want ErrMultipleTerminals", err)
-	}
-}
-
-func TestDefineActions_UnknownOption(t *testing.T) {
-	t.Parallel()
-	type bad[E any] struct {
-		A Action[string, E] `rule:"a,bogus"`
-	}
-	_, err := DefineActions[bad[testEnv], testEnv]()
+	_, err := DefineActions[testEnv, bad[testEnv]]()
 	if !errors.Is(err, ErrDefine) {
 		t.Errorf("got %v, want ErrDefine", err)
 	}
@@ -177,66 +102,105 @@ func TestDefineActions_NoActionFields(t *testing.T) {
 	type bad struct {
 		Name string
 	}
-	_, err := DefineActions[bad, testEnv]()
+	_, err := DefineActions[testEnv, bad]()
 	if !errors.Is(err, ErrDefine) {
 		t.Errorf("got %v, want ErrDefine", err)
 	}
 }
 
-func TestDefineActions_HyphenInName(t *testing.T) {
+func TestDefineActions_IsZero_Nil(t *testing.T) {
 	t.Parallel()
-	type ok[E any] struct {
-		A Action[string, E] `rule:"my-action"`
-	}
-	_, err := DefineActions[ok[testEnv], testEnv]()
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	var a *Actions[testEnv, testActions[testEnv]]
+	if !a.IsZero() {
+		t.Error("nil Actions should be zero")
 	}
 }
 
-func TestDefineActions_UnderscoreInName(t *testing.T) {
+func TestDefineActions_IsZero_Uninitialised(t *testing.T) {
 	t.Parallel()
-	type ok[E any] struct {
-		A Action[string, E] `rule:"my_action"`
-	}
-	_, err := DefineActions[ok[testEnv], testEnv]()
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	a := &Actions[testEnv, testActions[testEnv]]{}
+	if !a.IsZero() {
+		t.Error("uninitialised Actions should be zero")
 	}
 }
 
-// --- Compile type checking ---
+// --- Describe ---
 
-func TestDefineActions_Compile_TypeMismatch(t *testing.T) {
+func TestDescribe_ReturnsAllActions(t *testing.T) {
 	t.Parallel()
-	actions, err := DefineActions[testActions[testEnv], testEnv]()
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	af := actions.compilers["read"]
-	_, err = af.compile("not-a-bool")
-	if !errors.Is(err, ErrValueType) {
-		t.Errorf("got %v, want ErrValueType", err)
+	actions := defineTestActions(t)
+	infos := actions.Describe()
+	if len(infos) != 6 {
+		t.Fatalf("got %d infos, want 6", len(infos))
 	}
 }
 
-func TestDefineActions_Compile_TypeMatch(t *testing.T) {
+func TestDescribe_ActionInfo(t *testing.T) {
 	t.Parallel()
-	actions, err := DefineActions[testActions[testEnv], testEnv]()
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	actions := defineTestActions(t)
+	infos := actions.Describe()
+
+	// Find label.
+	var label ActionInfo
+	for _, info := range infos {
+		if info.Name == "label" {
+			label = info
+			break
+		}
 	}
 
-	af := actions.compilers["label"]
-	av, err := af.compile("hello")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if label.Name != "label" {
+		t.Fatal("label action not found")
 	}
-	if av.actionName() != "label" {
-		t.Errorf("got %q, want %q", av.actionName(), "label")
+	if label.Cardinality != action.Multi {
+		t.Errorf("cardinality = %v, want Multi", label.Cardinality)
 	}
-	if av.stringValue() != "hello" {
-		t.Errorf("got %q, want %q", av.stringValue(), "hello")
+	if label.Terminal {
+		t.Error("label should not be terminal")
+	}
+	if label.ValueType != "string" {
+		t.Errorf("value type = %q, want string", label.ValueType)
+	}
+	if label.Description != "categorisation labels" {
+		t.Errorf("description = %q, want %q", label.Description, "categorisation labels")
+	}
+}
+
+func TestDescribe_TerminalAction(t *testing.T) {
+	t.Parallel()
+	actions := defineTestActions(t)
+	infos := actions.Describe()
+
+	var del ActionInfo
+	for _, info := range infos {
+		if info.Name == "delete" {
+			del = info
+			break
+		}
+	}
+
+	if !del.Terminal {
+		t.Error("delete should be terminal")
+	}
+	if del.ValueType != "action.NoArgs" {
+		t.Errorf("value type = %q, want action.NoArgs", del.ValueType)
+	}
+}
+
+func TestDescribe_NoDescription(t *testing.T) {
+	t.Parallel()
+	actions := defineTestActions(t)
+	infos := actions.Describe()
+
+	var move ActionInfo
+	for _, info := range infos {
+		if info.Name == "move" {
+			move = info
+			break
+		}
+	}
+
+	if move.Description != "" {
+		t.Errorf("description = %q, want empty", move.Description)
 	}
 }

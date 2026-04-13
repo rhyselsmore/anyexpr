@@ -10,34 +10,50 @@ var (
 	// the same tag name.
 	ErrDuplicateRegistration = errors.New("rules: duplicate registration")
 
-	// ErrDuplicateRule is returned when two rule definitions share the
-	// same name.
-	ErrDuplicateRule = errors.New("rules: duplicate rule name")
-
-	// ErrUnknownAction is returned when a rule references an action name
-	// not present in the actions struct.
-	ErrUnknownAction = errors.New("rules: unknown action")
-
-	// ErrMultipleTerminals is returned when more than one terminal action
-	// is declared or used in a single rule.
-	ErrMultipleTerminals = errors.New("rules: multiple terminal actions")
-
-	// ErrCardinalityViolation is returned when a single-cardinality action
-	// appears more than once in the same rule.
-	ErrCardinalityViolation = errors.New("rules: single-use action used multiple times")
+	// ErrDefinitionDuplicate is returned when two rule definitions carry
+	// the same name during compilation.
+	ErrDefinitionDuplicate = errors.New("rules: duplicate definition")
 
 	// ErrCompile is returned when a when-expression fails to compile.
 	ErrCompile = errors.New("rules: compilation failed")
 
-	// ErrValueType is returned when an action's value does not match the
-	// expected type.
-	ErrValueType = errors.New("rules: action value type mismatch")
+	// ErrNoDefinitions is returned when Compile is called with an
+	// empty definitions slice.
+	ErrNoDefinitions = errors.New("rules: no rule definitions provided")
 
-	// ErrNameCollision is returned when merging rulesets with overlapping
-	// rule names without AllowOverride.
-	ErrNameCollision = errors.New("rules: rule name collision across rulesets")
+	// ErrUnknownAction is returned when a rule references an action
+	// name that was not registered.
+	ErrUnknownAction = errors.New("rules: unknown action")
 
-	// ErrNotDefined is returned when an uninitialised *Actions is passed
-	// to NewEvaluator or Compile.
-	ErrNotDefined = errors.New("rules: actions not defined")
+	// ErrCardinalityViolation is returned when a single-cardinality
+	// action appears more than once in the same rule.
+	ErrCardinalityViolation = errors.New("rules: single-use action used multiple times")
+
+	// ErrMultipleTerminals is returned when a single rule contains
+	// more than one terminal action.
+	ErrMultipleTerminals = errors.New("rules: multiple terminal actions in rule")
+
+	// ErrActionValueType is returned when an action's value does not
+	// match the expected type from the definition.
+	ErrActionValueType = errors.New("rules: action value type mismatch")
+
+	// ErrProgramZero is returned when a nil or uncompiled Program is
+	// passed to NewEvaluator.
+	ErrProgramZero = errors.New("rules: program is nil or not compiled")
+
+	// ErrActionsZero is returned when a nil or uninitialised Actions
+	// registry is passed to Compile.
+	ErrActionsZero = errors.New("rules: actions registry is nil or not initialized")
+
+	// ErrUnknownDefinition is returned when Update is called with a
+	// definition name that is not registered.
+	ErrUnknownDefinition = errors.New("rules: unknown definition")
+
+	// ErrAssert is returned when an assertion expression fails to
+	// compile or evaluate.
+	ErrAssert = errors.New("rules: assertion error")
+
+	// ErrAssertFailed is returned when an assertion expression
+	// evaluates to false.
+	ErrAssertFailed = errors.New("rules: assertion failed")
 )

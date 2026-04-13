@@ -151,10 +151,24 @@ err := compiler.Check([]*anyexpr.Source{
 ## Rules Engine
 
 The [anyexpr/rules](rules/) subpackage builds on top of anyexpr with a
-typed when/then rule evaluation engine. Define actions as a struct with
-generic fields, compile rule definitions with type-checked values, and
-evaluate them against your environment type — results are accessed
-through typed struct fields, not string keys.
+typed when/then rule evaluation engine:
+
+- **Typed actions** — declare actions as struct fields with
+  `Action[V, E]`. Values are type-checked at compile time.
+- **Compile-time validation** — expression errors, unknown actions,
+  type mismatches, and cardinality violations are caught before
+  evaluation.
+- **Typed results** — read results through struct fields, not string
+  keys. Full provenance (which rule set each value).
+- **Skip expressions** — conditionally skip rules with a second
+  expression, with configurable evaluation order.
+- **Tracing** — opt-in per-rule tracing with timing and outcomes.
+- **Selectors** — filter rules by tags, names, or expressions.
+- **Registry** — CRUD for rule definitions with on-demand compilation.
+- **Testing** — validate expressions, test rules in isolation, write
+  assertions in the expression language.
+- **Dispatch** — route evaluation results to named handlers gated by
+  expressions, with plans, strategies, and structured logging.
 
 See the [rules README](rules/README.md) for full documentation.
 

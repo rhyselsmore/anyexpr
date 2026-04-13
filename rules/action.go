@@ -2,238 +2,177 @@ package rules
 
 import (
 	"fmt"
-	"reflect"
+
+	"github.com/rhyselsmore/anyexpr/rules2/action"
 )
 
-// Actionable constrains the types that Action[T] can hold.
-// These map to JSON primitives: string, boolean, number, and null/omit.
-type Actionable interface {
-	string | bool | int | float64 | NoArgs
+type actionBinding[V action.Valuable, E any] struct {
+	tags  []string
+	value V
 }
 
-// Cardinality defines how an action accumulates values across rules.
-type Cardinality int
-
-const (
-	// Single means at most once per rule. Across rules, last match wins.
-	Single Cardinality = iota
-	// Multi may appear multiple times. All values accumulate, duplicates
-	// stripped.
-	Multi
-)
-
-func (c Cardinality) String() string {
-	switch c {
-	case Single:
-		return "single"
-	case Multi:
-		return "multi"
-	default:
-		return fmt.Sprintf("Cardinality(%d)", int(c))
-	}
-}
-
-// entry stores a single value alongside the rule that produced it.
-type entry[T Actionable] struct {
-	value    T
-	ruleName string
-	ruleTags []string
+// Trigger records a single action triggered by a matched rule.
+type Trigger[V action.Valuable] struct {
+	Rule  string
+	Tags  []string
+	Value V
 }
 
 // Action is a typed action field within an actions struct.
 //
-// T is the value type this action carries (string, bool, int, float64,
-// or NoArgs), constrained by Actionable.
-//
-// E is the environment type — the struct that expressions are evaluated
-// against (e.g. Email, Transaction). E flows through from the actions
-// struct declaration, tying each action to the type it operates on.
-type Action[T Actionable, E any] struct {
-	// Schema fields — set by DefineActions, carried through copies.
-	name        string
-	cardinality Cardinality
-	terminal    bool
-	index       int
-	configured  bool
+//   - V is the value type (string, bool, int, float64, or NoArgs),
+//     constrained by action.Valuable.
+//   - E is the environment type (e.g. Email).
+type Action[V action.Valuable, E any] struct {
+	definition action.Definition[V]
+	bindings   map[string][]actionBinding[V, E]
+	index      int // field index
 
-	// Value fields — set during evaluation.
-	entries []entry[T]
+	// Triggered is true if any rule set this action.
+	Triggered bool
+
+	// Value is the resolved value. For Single cardinality, last wins.
+	// For Multi, the last trigger's value.
+	Value V
+
+	// Values holds all resolved values. Populated for Multi cardinality
+	// (deduped). For Single, contains zero or one element.
+	Values []V
+
+	// Triggers holds the full provenance — every rule that set this
+	// action, with its tags and value.
+	Triggers []Trigger[V]
 }
 
-// --- Public accessors ---
-
-// Name returns the action's registered name from the struct tag.
-func (a *Action[T, E]) Name() string { return a.name }
-
-// Value returns the resolved value and whether it was set. For Single
-// actions, returns the winning (last) value. For Multi, returns the
-// last value. For NoArgs, returns the zero value; use Fired instead.
-func (a *Action[T, E]) Value() (T, bool) {
-	if len(a.entries) == 0 {
-		var zero T
-		return zero, false
+func (b *Action[V, E]) define(name string, description string, cardinality action.Cardinality, terminal bool) error {
+	opts := []action.DefinitionOpt[V]{
+		action.WithCardinality[V](cardinality),
+		action.Terminal[V](terminal),
 	}
-	return a.entries[len(a.entries)-1].value, true
-}
-
-// Values returns all resolved values. For Multi actions, values are
-// deduped. For Single, returns zero or one element. Returns a non-nil
-// empty slice if the action was not triggered.
-func (a *Action[T, E]) Values() []T {
-	if len(a.entries) == 0 {
-		return []T{}
+	if description != "" {
+		opts = append(opts, action.WithDescription[V](description))
 	}
-	result := make([]T, len(a.entries))
-	for i, e := range a.entries {
-		result[i] = e.value
+	def, err := action.Define(name, opts...)
+	if err != nil {
+		return err
 	}
-	return result
+	b.definition = def
+	b.bindings = make(map[string][]actionBinding[V, E])
+	return nil
 }
 
-// Fired returns true if this action was triggered by any rule.
-func (a *Action[T, E]) Fired() bool {
-	return len(a.entries) > 0
-}
+func (b *Action[V, E]) bind(ruleName string, ruleTags []string, v any) (bool, action.Cardinality, error) {
+	var val V
 
-// ByRule returns values contributed by the named rule. Returns a
-// non-nil empty slice if no values from that rule.
-func (a *Action[T, E]) ByRule(name string) []T {
-	var result []T
-	for _, e := range a.entries {
-		if e.ruleName == name {
-			result = append(result, e.value)
+	// For NoArgs actions, accept nil or NoArgs{}.
+	if v == nil {
+		if _, isNoArgs := any(val).(action.NoArgs); !isNoArgs {
+			return false, 0, fmt.Errorf("%w: action %q: expected %T, got nil", ErrActionValueType, b.definition.Name(), val)
+		}
+	} else {
+		var ok bool
+		val, ok = v.(V)
+		if !ok {
+			return false, 0, fmt.Errorf("%w: action %q: expected %T, got %T", ErrActionValueType, b.definition.Name(), val, v)
 		}
 	}
-	if result == nil {
-		return []T{}
+
+	if _, ok := b.bindings[ruleName]; !ok {
+		b.bindings[ruleName] = make([]actionBinding[V, E], 0)
 	}
-	return result
+
+	b.bindings[ruleName] = append(b.bindings[ruleName], actionBinding[V, E]{
+		tags:  ruleTags,
+		value: val,
+	})
+
+	return b.definition.Terminal(), b.definition.Cardinality(), nil
 }
 
-// ByTag returns values contributed by rules with the given tag.
-// Returns a non-nil empty slice if no matching rules.
-func (a *Action[T, E]) ByTag(tag string) []T {
-	var result []T
-	for _, e := range a.entries {
-		for _, t := range e.ruleTags {
-			if t == tag {
-				result = append(result, e.value)
-				break
-			}
+func (b *Action[V, E]) trigger(matched []string) {
+	for _, rule := range matched {
+		entries, ok := b.bindings[rule]
+		if !ok {
+			continue
+		}
+		b.Triggered = true
+		for _, entry := range entries {
+			b.Triggers = append(b.Triggers, Trigger[V]{
+				Rule:  rule,
+				Tags:  entry.tags,
+				Value: entry.value,
+			})
 		}
 	}
-	if result == nil {
-		return []T{}
-	}
-	return result
-}
 
-// Rules returns the names of rules that triggered this action, in
-// evaluation order, deduped.
-func (a *Action[T, E]) Rules() []string {
-	if len(a.entries) == 0 {
-		return []string{}
-	}
-	seen := make(map[string]bool)
-	var result []string
-	for _, e := range a.entries {
-		if !seen[e.ruleName] {
-			seen[e.ruleName] = true
-			result = append(result, e.ruleName)
-		}
-	}
-	return result
-}
-
-// --- Unexported interfaces ---
-
-// actionField is implemented by *Action[T, E] for all T. Used by
-// DefineActions to configure actions and by Compile to type-check
-// values — all at init/compile time, not in the hot path.
-type actionField[E any] interface {
-	configure(name string, c Cardinality, terminal bool, index int)
-	compile(v any) (actionValuer[E], error)
-}
-
-// actionResolver is implemented by *Action[T, E]. Used by the
-// evaluator after all rules have been processed to apply dedup
-// and last-wins semantics.
-type actionResolver interface {
-	resolve()
-}
-
-// --- actionField implementation ---
-
-func (a *Action[T, E]) configure(name string, c Cardinality, terminal bool, index int) {
-	a.name = name
-	a.cardinality = c
-	a.terminal = terminal
-	a.index = index
-	a.configured = true
-}
-
-func (a *Action[T, E]) compile(v any) (actionValuer[E], error) {
-	val, ok := v.(T)
-	if !ok {
-		var zero T
-		return nil, fmt.Errorf("%w: action %q: expected %T, got %T", ErrValueType, a.name, zero, v)
-	}
-	return &actionValue[T, E]{
-		action: *a, // value copy — name, cardinality, terminal, index carry over; entries nil
-		value:  val,
-	}, nil
-}
-
-func (a *Action[T, E]) resolve() {
-	if len(a.entries) == 0 {
+	if !b.Triggered {
 		return
 	}
-	if a.cardinality == Multi {
+
+	// Last value wins for Value — works for both Single and Multi.
+	b.Value = b.Triggers[len(b.Triggers)-1].Value
+
+	// Build Values — for Multi, collect all and dedup. For Single,
+	// just the winning value.
+	if b.definition.Cardinality() == action.Multi {
 		seen := make(map[any]bool)
-		deduped := make([]entry[T], 0, len(a.entries))
-		for _, e := range a.entries {
-			key := any(e.value)
+		for _, t := range b.Triggers {
+			key := any(t.Value)
 			if !seen[key] {
 				seen[key] = true
-				deduped = append(deduped, e)
+				b.Values = append(b.Values, t.Value)
 			}
 		}
-		a.entries = deduped
+	} else {
+		b.Values = []V{b.Value}
 	}
-	// Single: keep all entries for provenance. Value() returns the last.
 }
 
-// --- actionValuer (compiled action with typed value) ---
+// ActionInfo is the type-erased metadata for a defined action,
+// returned by Actions.Describe.
+type ActionInfo struct {
+	// Name is the action's registered name from the struct tag.
+	Name string
 
-// actionValuer is a compiled action entry — a copy of the Action with
-// a typed value, ready to be applied during evaluation. Stored in
-// compiledRule as an interface to erase T.
-type actionValuer[E any] interface {
-	actionName() string
-	actionCardinality() Cardinality
-	actionTerminal() bool
-	// addEntry writes an entry to the corresponding Action field on the
-	// schema copy pointed to by ptr, using the stored field index.
-	addEntry(ptr reflect.Value, ruleName string, ruleTags []string)
-	// stringValue returns the value as a string for audit/display.
-	stringValue() string
+	// Description is the human-readable description from the
+	// `description` struct tag, if present.
+	Description string
+
+	// Cardinality is Single or Multi.
+	Cardinality action.Cardinality
+
+	// Terminal is true if triggering this action halts evaluation.
+	Terminal bool
+
+	// ValueType is the Go type name of the value (e.g. "string", "bool").
+	ValueType string
 }
 
-type actionValue[T Actionable, E any] struct {
-	action Action[T, E] // value copy from compile — has index, metadata, nil entries
-	value  T
+func (b *Action[V, E]) describe() ActionInfo {
+	var zero V
+	return ActionInfo{
+		Name:        b.definition.Name(),
+		Description: b.definition.Description(),
+		Cardinality: b.definition.Cardinality(),
+		Terminal:    b.definition.Terminal(),
+		ValueType:   fmt.Sprintf("%T", zero),
+	}
 }
 
-func (av *actionValue[T, E]) actionName() string             { return av.action.name }
-func (av *actionValue[T, E]) actionCardinality() Cardinality { return av.action.cardinality }
-func (av *actionValue[T, E]) actionTerminal() bool           { return av.action.terminal }
-func (av *actionValue[T, E]) stringValue() string            { return fmt.Sprint(av.value) }
+type actionTriggerable[E any] interface {
+	trigger([]string)
+}
 
-func (av *actionValue[T, E]) addEntry(ptr reflect.Value, ruleName string, ruleTags []string) {
-	field := ptr.Field(av.action.index).Addr().Interface().(*Action[T, E])
-	field.entries = append(field.entries, entry[T]{
-		value:    av.value,
-		ruleName: ruleName,
-		ruleTags: ruleTags,
-	})
+type actionBinder[E any] interface {
+	bind(ruleName string, ruleTags []string, value any) (bool, action.Cardinality, error)
+}
+
+type actionDescriber interface {
+	describe() ActionInfo
+}
+
+type actionDefiner[E any] interface {
+	actionBinder[E]
+	actionDescriber
+	define(name string, description string, cardinality action.Cardinality, terminal bool) error
 }

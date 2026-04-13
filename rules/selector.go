@@ -1,10 +1,21 @@
 package rules
 
+import "github.com/rhyselsmore/anyexpr"
+
 type selector struct {
 	onlyTags     map[string]bool
 	onlyNames    map[string]bool
 	excludeTags  map[string]bool
 	excludeNames map[string]bool
+	exprFilter   *anyexpr.Program[RuleMeta]
+}
+
+// RuleMeta is the struct that expression-based selectors evaluate
+// against. It exposes rule metadata as fields that can be referenced
+// in selector expressions.
+type RuleMeta struct {
+	Name string
+	Tags []string
 }
 
 // includes returns whether a rule with the given name and tags passes
@@ -14,6 +25,7 @@ type selector struct {
 // If onlyNames is non-empty, the rule name must be in the set.
 // If both are set, either match suffices (union of includes).
 // Excludes take priority over includes.
+// If an expression filter is set, it is evaluated last.
 func (s selector) includes(name string, tags []string) bool {
 	if s.excludeNames[name] {
 		return false
@@ -25,44 +37,30 @@ func (s selector) includes(name string, tags []string) bool {
 	}
 
 	hasIncludes := len(s.onlyTags) > 0 || len(s.onlyNames) > 0
-	if !hasIncludes {
-		return true
-	}
-
-	if s.onlyNames[name] {
-		return true
-	}
-
-	for _, t := range tags {
-		if s.onlyTags[t] {
-			return true
+	if hasIncludes {
+		matched := false
+		if s.onlyNames[name] {
+			matched = true
+		}
+		if !matched {
+			for _, t := range tags {
+				if s.onlyTags[t] {
+					matched = true
+					break
+				}
+			}
+		}
+		if !matched {
+			return false
 		}
 	}
 
-	return false
-}
+	if s.exprFilter != nil {
+		ok, err := s.exprFilter.Match(RuleMeta{Name: name, Tags: tags})
+		if err != nil || !ok {
+			return false
+		}
+	}
 
-func mergeSets(a, b map[string]bool) map[string]bool {
-	if len(a) == 0 && len(b) == 0 {
-		return nil
-	}
-	out := make(map[string]bool, len(a)+len(b))
-	for k := range a {
-		out[k] = true
-	}
-	for k := range b {
-		out[k] = true
-	}
-	return out
-}
-
-func copySets(m map[string]bool) map[string]bool {
-	if len(m) == 0 {
-		return nil
-	}
-	out := make(map[string]bool, len(m))
-	for k := range m {
-		out[k] = true
-	}
-	return out
+	return true
 }

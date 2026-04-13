@@ -4,40 +4,16 @@ import (
 	"context"
 	"errors"
 	"testing"
-
-	"github.com/rhyselsmore/anyexpr"
 )
 
-type evalEnv struct {
-	Name   string
-	Amount float64
-	Active bool
-}
-
-type evalActions[E any] struct {
-	Label    Action[string, E]  `rule:"label,multi"`
-	Category Action[string, E]  `rule:"category"`
-	Read     Action[bool, E]    `rule:"read"`
-	Priority Action[int, E]     `rule:"priority"`
-	Score    Action[float64, E] `rule:"score"`
-	Delete   Action[NoArgs, E]  `rule:"delete,terminal"`
-}
-
-func evalSetup(t *testing.T, defs []Definition, evalOpts ...EvaluatorOpt) *Evaluator[evalActions[evalEnv], evalEnv] {
+func evalSetup(t *testing.T, defs []Definition, opts ...EvaluatorOpt) *Evaluator[testEnv, testActions[testEnv]] {
 	t.Helper()
-	actions, err := DefineActions[evalActions[evalEnv], evalEnv]()
-	if err != nil {
-		t.Fatalf("DefineActions: %v", err)
-	}
-	compiler, err := anyexpr.NewCompiler[evalEnv]()
-	if err != nil {
-		t.Fatalf("NewCompiler: %v", err)
-	}
-	rs, err := Compile(actions, compiler, defs)
+	actions, compiler := compileSetup(t)
+	prog, err := Compile(compiler, actions, defs)
 	if err != nil {
 		t.Fatalf("Compile: %v", err)
 	}
-	ev, err := NewEvaluator(actions, rs, evalOpts...)
+	ev, err := NewEvaluator(prog, opts...)
 	if err != nil {
 		t.Fatalf("NewEvaluator: %v", err)
 	}
@@ -56,20 +32,18 @@ func TestEvaluator_SingleMatch(t *testing.T) {
 		},
 	})
 
-	result, err := ev.Run(context.Background(), evalEnv{Name: "alice"})
+	eval, err := ev.Run(context.Background(), testEnv{Name: "alice"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(result.Matched) != 1 {
-		t.Fatalf("got %d matched, want 1", len(result.Matched))
+	if len(eval.Matched) != 1 || eval.Matched[0] != "greet" {
+		t.Errorf("Matched = %v, want [greet]", eval.Matched)
 	}
-	if result.Matched[0].Name != "greet" {
-		t.Errorf("got %q, want %q", result.Matched[0].Name, "greet")
+	if !eval.Result.Label.Triggered {
+		t.Error("Label should be triggered")
 	}
-
-	vals := result.Actions.Label.Values()
-	if len(vals) != 1 || vals[0] != "friend" {
-		t.Errorf("Label.Values() = %v, want [friend]", vals)
+	if eval.Result.Label.Value != "friend" {
+		t.Errorf("Label.Value = %q, want friend", eval.Result.Label.Value)
 	}
 }
 
@@ -83,15 +57,15 @@ func TestEvaluator_NoMatch(t *testing.T) {
 		},
 	})
 
-	result, err := ev.Run(context.Background(), evalEnv{Name: "bob"})
+	eval, err := ev.Run(context.Background(), testEnv{Name: "bob"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(result.Matched) != 0 {
-		t.Errorf("got %d matched, want 0", len(result.Matched))
+	if len(eval.Matched) != 0 {
+		t.Errorf("Matched = %v, want []", eval.Matched)
 	}
-	if result.Actions.Label.Fired() {
-		t.Error("label should not be fired")
+	if eval.Result.Label.Triggered {
+		t.Error("Label should not be triggered")
 	}
 }
 
@@ -108,27 +82,26 @@ func TestEvaluator_MultipleMatches(t *testing.T) {
 			When: `Active`,
 			Then: []ActionEntry{
 				{Name: "label", Value: "b"},
-				{Name: "category", Value: "active"},
+				{Name: "move", Value: "inbox"},
 			},
 		},
 	})
 
-	result, err := ev.Run(context.Background(), evalEnv{Active: true})
+	eval, err := ev.Run(context.Background(), testEnv{Active: true})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(result.Matched) != 2 {
-		t.Fatalf("got %d matched, want 2", len(result.Matched))
+	if len(eval.Matched) != 2 {
+		t.Fatalf("got %d matched, want 2", len(eval.Matched))
 	}
 
-	labels := result.Actions.Label.Values()
+	labels := eval.Result.Label.Values
 	if len(labels) != 2 || labels[0] != "a" || labels[1] != "b" {
-		t.Errorf("Label.Values() = %v, want [a b]", labels)
+		t.Errorf("Label.Values = %v, want [a b]", labels)
 	}
 
-	cat, ok := result.Actions.Category.Value()
-	if !ok || cat != "active" {
-		t.Errorf("Category.Value() = (%q, %v), want (active, true)", cat, ok)
+	if eval.Result.Move.Value != "inbox" {
+		t.Errorf("Move.Value = %q, want inbox", eval.Result.Move.Value)
 	}
 }
 
@@ -141,8 +114,8 @@ func TestEvaluator_AllTypes(t *testing.T) {
 			Name: "all",
 			When: `Active`,
 			Then: []ActionEntry{
-				{Name: "label", Value: "tag1"},
-				{Name: "category", Value: "main"},
+				{Name: "label", Value: "tag"},
+				{Name: "move", Value: "archive"},
 				{Name: "read", Value: true},
 				{Name: "priority", Value: 5},
 				{Name: "score", Value: 0.95},
@@ -150,22 +123,22 @@ func TestEvaluator_AllTypes(t *testing.T) {
 		},
 	})
 
-	result, err := ev.Run(context.Background(), evalEnv{Active: true})
+	eval, err := ev.Run(context.Background(), testEnv{Active: true})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if v, _ := result.Actions.Category.Value(); v != "main" {
-		t.Errorf("Category = %q, want main", v)
+	if eval.Result.Move.Value != "archive" {
+		t.Errorf("Move = %q", eval.Result.Move.Value)
 	}
-	if v, _ := result.Actions.Read.Value(); !v {
-		t.Error("Read = false, want true")
+	if eval.Result.Read.Value != true {
+		t.Error("Read = false")
 	}
-	if v, _ := result.Actions.Priority.Value(); v != 5 {
-		t.Errorf("Priority = %d, want 5", v)
+	if eval.Result.Priority.Value != 5 {
+		t.Errorf("Priority = %d", eval.Result.Priority.Value)
 	}
-	if v, _ := result.Actions.Score.Value(); v != 0.95 {
-		t.Errorf("Score = %f, want 0.95", v)
+	if eval.Result.Score.Value != 0.95 {
+		t.Errorf("Score = %f", eval.Result.Score.Value)
 	}
 }
 
@@ -175,16 +148,16 @@ func TestEvaluator_NoArgs(t *testing.T) {
 		{
 			Name: "cleanup",
 			When: `Active`,
-			Then: []ActionEntry{{Name: "delete", Value: NoArgs{}}},
+			Then: []ActionEntry{{Name: "delete"}},
 		},
 	})
 
-	result, err := ev.Run(context.Background(), evalEnv{Active: true})
+	eval, err := ev.Run(context.Background(), testEnv{Active: true})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !result.Actions.Delete.Fired() {
-		t.Error("Delete should be fired")
+	if !eval.Result.Delete.Triggered {
+		t.Error("Delete should be triggered")
 	}
 }
 
@@ -208,14 +181,14 @@ func TestEvaluator_MultiDedup(t *testing.T) {
 		},
 	})
 
-	result, err := ev.Run(context.Background(), evalEnv{Active: true})
+	eval, err := ev.Run(context.Background(), testEnv{Active: true})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	labels := result.Actions.Label.Values()
+	labels := eval.Result.Label.Values
 	if len(labels) != 2 || labels[0] != "dup" || labels[1] != "unique" {
-		t.Errorf("Label.Values() = %v, want [dup unique]", labels)
+		t.Errorf("Label.Values = %v, want [dup unique]", labels)
 	}
 }
 
@@ -227,23 +200,22 @@ func TestEvaluator_SingleLastWins(t *testing.T) {
 		{
 			Name: "r1",
 			When: `Active`,
-			Then: []ActionEntry{{Name: "category", Value: "first"}},
+			Then: []ActionEntry{{Name: "move", Value: "first"}},
 		},
 		{
 			Name: "r2",
 			When: `Active`,
-			Then: []ActionEntry{{Name: "category", Value: "second"}},
+			Then: []ActionEntry{{Name: "move", Value: "second"}},
 		},
 	})
 
-	result, err := ev.Run(context.Background(), evalEnv{Active: true})
+	eval, err := ev.Run(context.Background(), testEnv{Active: true})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	cat, _ := result.Actions.Category.Value()
-	if cat != "second" {
-		t.Errorf("Category = %q, want second", cat)
+	if eval.Result.Move.Value != "second" {
+		t.Errorf("Move = %q, want second", eval.Result.Move.Value)
 	}
 }
 
@@ -265,18 +237,18 @@ func TestEvaluator_StopHalts(t *testing.T) {
 		},
 	})
 
-	result, err := ev.Run(context.Background(), evalEnv{Active: true})
+	eval, err := ev.Run(context.Background(), testEnv{Active: true})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !result.Stopped {
+	if !eval.Stopped {
 		t.Error("expected stopped")
 	}
-	if result.StoppedBy != "stopper" {
-		t.Errorf("StoppedBy = %q, want stopper", result.StoppedBy)
+	if eval.StoppedBy != "stopper" {
+		t.Errorf("StoppedBy = %q, want stopper", eval.StoppedBy)
 	}
-	if len(result.Matched) != 1 {
-		t.Errorf("got %d matched, want 1", len(result.Matched))
+	if len(eval.Matched) != 1 {
+		t.Errorf("got %d matched, want 1", len(eval.Matched))
 	}
 }
 
@@ -287,91 +259,69 @@ func TestEvaluator_TerminalImpliesStop(t *testing.T) {
 			Name: "cleanup",
 			When: `Active`,
 			Then: []ActionEntry{
-				{Name: "label", Value: "before-delete"},
-				{Name: "delete", Value: NoArgs{}},
+				{Name: "label", Value: "before"},
+				{Name: "delete"},
 			},
 		},
 		{
 			Name: "after",
 			When: `Active`,
-			Then: []ActionEntry{{Name: "label", Value: "should-not-appear"}},
+			Then: []ActionEntry{{Name: "label", Value: "after"}},
 		},
 	})
 
-	result, err := ev.Run(context.Background(), evalEnv{Active: true})
+	eval, err := ev.Run(context.Background(), testEnv{Active: true})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !result.Stopped {
+	if !eval.Stopped {
 		t.Error("expected stopped")
 	}
-	if !result.Actions.Delete.Fired() {
-		t.Error("Delete should be fired")
+	if !eval.Result.Delete.Triggered {
+		t.Error("Delete should be triggered")
 	}
-	labels := result.Actions.Label.Values()
-	if len(labels) != 1 || labels[0] != "before-delete" {
-		t.Errorf("Label.Values() = %v, want [before-delete]", labels)
+	labels := eval.Result.Label.Values
+	if len(labels) != 1 || labels[0] != "before" {
+		t.Errorf("Label.Values = %v, want [before]", labels)
 	}
 }
 
 // --- Provenance ---
 
-func TestEvaluator_Provenance_ByRule(t *testing.T) {
-	t.Parallel()
-	ev := evalSetup(t, []Definition{
-		{
-			Name: "r1",
-			When: `Active`,
-			Then: []ActionEntry{{Name: "label", Value: "from-r1"}},
-		},
-		{
-			Name: "r2",
-			When: `Active`,
-			Then: []ActionEntry{{Name: "label", Value: "from-r2"}},
-		},
-	})
-
-	result, err := ev.Run(context.Background(), evalEnv{Active: true})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	r1 := result.Actions.Label.ByRule("r1")
-	if len(r1) != 1 || r1[0] != "from-r1" {
-		t.Errorf("ByRule(r1) = %v, want [from-r1]", r1)
-	}
-
-	rules := result.Actions.Label.Rules()
-	if len(rules) != 2 || rules[0] != "r1" || rules[1] != "r2" {
-		t.Errorf("Rules() = %v, want [r1 r2]", rules)
-	}
-}
-
-func TestEvaluator_Provenance_ByTag(t *testing.T) {
+func TestEvaluator_Triggers(t *testing.T) {
 	t.Parallel()
 	ev := evalSetup(t, []Definition{
 		{
 			Name: "r1",
 			Tags: []string{"billing"},
 			When: `Active`,
-			Then: []ActionEntry{{Name: "label", Value: "billed"}},
+			Then: []ActionEntry{{Name: "label", Value: "from-r1"}},
 		},
 		{
 			Name: "r2",
 			Tags: []string{"shipping"},
 			When: `Active`,
-			Then: []ActionEntry{{Name: "label", Value: "shipped"}},
+			Then: []ActionEntry{{Name: "label", Value: "from-r2"}},
 		},
 	})
 
-	result, err := ev.Run(context.Background(), evalEnv{Active: true})
+	eval, err := ev.Run(context.Background(), testEnv{Active: true})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	billing := result.Actions.Label.ByTag("billing")
-	if len(billing) != 1 || billing[0] != "billed" {
-		t.Errorf("ByTag(billing) = %v, want [billed]", billing)
+	triggers := eval.Result.Label.Triggers
+	if len(triggers) != 2 {
+		t.Fatalf("got %d triggers, want 2", len(triggers))
+	}
+	if triggers[0].Rule != "r1" || triggers[0].Value != "from-r1" {
+		t.Errorf("trigger[0] = %+v", triggers[0])
+	}
+	if triggers[1].Rule != "r2" || triggers[1].Value != "from-r2" {
+		t.Errorf("trigger[1] = %+v", triggers[1])
+	}
+	if len(triggers[0].Tags) != 1 || triggers[0].Tags[0] != "billing" {
+		t.Errorf("trigger[0].Tags = %v, want [billing]", triggers[0].Tags)
 	}
 }
 
@@ -394,16 +344,12 @@ func TestEvaluator_DisabledSkipped(t *testing.T) {
 		},
 	})
 
-	result, err := ev.Run(context.Background(), evalEnv{Active: true})
+	eval, err := ev.Run(context.Background(), testEnv{Active: true})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(result.Matched) != 1 {
-		t.Fatalf("got %d matched, want 1", len(result.Matched))
-	}
-	labels := result.Actions.Label.Values()
-	if len(labels) != 1 || labels[0] != "yes" {
-		t.Errorf("Label.Values() = %v, want [yes]", labels)
+	if len(eval.Matched) != 1 || eval.Matched[0] != "enabled" {
+		t.Errorf("Matched = %v, want [enabled]", eval.Matched)
 	}
 }
 
@@ -412,34 +358,34 @@ func TestEvaluator_DisabledSkipped(t *testing.T) {
 func TestEvaluator_WithTags(t *testing.T) {
 	t.Parallel()
 	ev := evalSetup(t, []Definition{
-		{Name: "r1", Tags: []string{"billing"}, When: `Active`, Then: []ActionEntry{{Name: "label", Value: "billed"}}},
-		{Name: "r2", Tags: []string{"shipping"}, When: `Active`, Then: []ActionEntry{{Name: "label", Value: "shipped"}}},
+		{Name: "r1", Tags: []string{"billing"}, When: `Active`, Then: []ActionEntry{{Name: "label", Value: "a"}}},
+		{Name: "r2", Tags: []string{"shipping"}, When: `Active`, Then: []ActionEntry{{Name: "label", Value: "b"}}},
 	})
 
-	result, err := ev.Run(context.Background(), evalEnv{Active: true}, WithTags("billing"))
+	eval, err := ev.Run(context.Background(), testEnv{Active: true}, WithTags("billing"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	labels := result.Actions.Label.Values()
-	if len(labels) != 1 || labels[0] != "billed" {
-		t.Errorf("Label.Values() = %v, want [billed]", labels)
+	labels := eval.Result.Label.Values
+	if len(labels) != 1 || labels[0] != "a" {
+		t.Errorf("Label.Values = %v, want [a]", labels)
 	}
 }
 
 func TestEvaluator_ExcludeTags(t *testing.T) {
 	t.Parallel()
 	ev := evalSetup(t, []Definition{
-		{Name: "r1", Tags: []string{"billing"}, When: `Active`, Then: []ActionEntry{{Name: "label", Value: "billed"}}},
-		{Name: "r2", Tags: []string{"shipping"}, When: `Active`, Then: []ActionEntry{{Name: "label", Value: "shipped"}}},
+		{Name: "r1", Tags: []string{"billing"}, When: `Active`, Then: []ActionEntry{{Name: "label", Value: "a"}}},
+		{Name: "r2", Tags: []string{"shipping"}, When: `Active`, Then: []ActionEntry{{Name: "label", Value: "b"}}},
 	})
 
-	result, err := ev.Run(context.Background(), evalEnv{Active: true}, ExcludeTags("billing"))
+	eval, err := ev.Run(context.Background(), testEnv{Active: true}, ExcludeTags("billing"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	labels := result.Actions.Label.Values()
-	if len(labels) != 1 || labels[0] != "shipped" {
-		t.Errorf("Label.Values() = %v, want [shipped]", labels)
+	labels := eval.Result.Label.Values
+	if len(labels) != 1 || labels[0] != "b" {
+		t.Errorf("Label.Values = %v, want [b]", labels)
 	}
 }
 
@@ -450,13 +396,13 @@ func TestEvaluator_WithNames(t *testing.T) {
 		{Name: "r2", When: `Active`, Then: []ActionEntry{{Name: "label", Value: "b"}}},
 	})
 
-	result, err := ev.Run(context.Background(), evalEnv{Active: true}, WithNames("r2"))
+	eval, err := ev.Run(context.Background(), testEnv{Active: true}, WithNames("r2"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	labels := result.Actions.Label.Values()
+	labels := eval.Result.Label.Values
 	if len(labels) != 1 || labels[0] != "b" {
-		t.Errorf("Label.Values() = %v, want [b]", labels)
+		t.Errorf("Label.Values = %v, want [b]", labels)
 	}
 }
 
@@ -467,17 +413,15 @@ func TestEvaluator_ExcludeNames(t *testing.T) {
 		{Name: "r2", When: `Active`, Then: []ActionEntry{{Name: "label", Value: "b"}}},
 	})
 
-	result, err := ev.Run(context.Background(), evalEnv{Active: true}, ExcludeNames("r1"))
+	eval, err := ev.Run(context.Background(), testEnv{Active: true}, ExcludeNames("r1"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	labels := result.Actions.Label.Values()
+	labels := eval.Result.Label.Values
 	if len(labels) != 1 || labels[0] != "b" {
-		t.Errorf("Label.Values() = %v, want [b]", labels)
+		t.Errorf("Label.Values = %v, want [b]", labels)
 	}
 }
-
-// --- Evaluator-level defaults ---
 
 func TestEvaluator_OnEvaluation_Defaults(t *testing.T) {
 	t.Parallel()
@@ -486,30 +430,104 @@ func TestEvaluator_OnEvaluation_Defaults(t *testing.T) {
 		{Name: "r2", Tags: []string{"shipping"}, When: `Active`, Then: []ActionEntry{{Name: "label", Value: "b"}}},
 	}, OnEvaluation(WithTags("billing")))
 
-	result, err := ev.Run(context.Background(), evalEnv{Active: true})
+	eval, err := ev.Run(context.Background(), testEnv{Active: true})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	labels := result.Actions.Label.Values()
+	labels := eval.Result.Label.Values
 	if len(labels) != 1 || labels[0] != "a" {
-		t.Errorf("Label.Values() = %v, want [a]", labels)
+		t.Errorf("Label.Values = %v, want [a]", labels)
 	}
 }
 
-func TestEvaluator_PerCallAdditive(t *testing.T) {
-	t.Parallel()
-	ev := evalSetup(t, []Definition{
-		{Name: "r1", Tags: []string{"billing"}, When: `Active`, Then: []ActionEntry{{Name: "label", Value: "a"}}},
-		{Name: "r2", Tags: []string{"billing", "archived"}, When: `Active`, Then: []ActionEntry{{Name: "label", Value: "b"}}},
-	}, OnEvaluation(WithTags("billing")))
+// --- Tracing ---
 
-	result, err := ev.Run(context.Background(), evalEnv{Active: true}, ExcludeTags("archived"))
+func TestEvaluator_Trace(t *testing.T) {
+	t.Parallel()
+	f := false
+	ev := evalSetup(t, []Definition{
+		{Name: "r1", When: `Active`, Then: []ActionEntry{{Name: "label", Value: "a"}}},
+		{Name: "disabled", When: `Active`, Enabled: &f},
+		{Name: "r3", When: `!Active`},
+	})
+
+	eval, err := ev.Run(context.Background(), testEnv{Active: true}, WithTrace(true))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	labels := result.Actions.Label.Values()
-	if len(labels) != 1 || labels[0] != "a" {
-		t.Errorf("Label.Values() = %v, want [a]", labels)
+	if !eval.Traced {
+		t.Error("expected traced")
+	}
+	if len(eval.Trace) != 3 {
+		t.Fatalf("got %d steps, want 3", len(eval.Trace))
+	}
+
+	if eval.Trace[0].Outcome != OutcomeMatched {
+		t.Errorf("step 0 outcome = %v, want Matched", eval.Trace[0].Outcome)
+	}
+	if eval.Trace[1].Outcome != OutcomeDisabled {
+		t.Errorf("step 1 outcome = %v, want Disabled", eval.Trace[1].Outcome)
+	}
+	if eval.Trace[2].Outcome != OutcomeSkipped {
+		t.Errorf("step 2 outcome = %v, want Skipped", eval.Trace[2].Outcome)
+	}
+}
+
+func TestEvaluator_TraceOff(t *testing.T) {
+	t.Parallel()
+	ev := evalSetup(t, []Definition{
+		{Name: "r1", When: `Active`, Then: []ActionEntry{{Name: "label", Value: "a"}}},
+	})
+
+	eval, err := ev.Run(context.Background(), testEnv{Active: true})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if eval.Traced {
+		t.Error("should not be traced by default")
+	}
+	if eval.Trace != nil {
+		t.Error("Trace should be nil when tracing is off")
+	}
+}
+
+func TestEvaluator_TraceExcluded(t *testing.T) {
+	t.Parallel()
+	ev := evalSetup(t, []Definition{
+		{Name: "r1", Tags: []string{"billing"}, When: `Active`},
+	})
+
+	eval, err := ev.Run(context.Background(), testEnv{Active: true},
+		WithTrace(true), ExcludeTags("billing"),
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(eval.Trace) != 1 {
+		t.Fatalf("got %d steps, want 1", len(eval.Trace))
+	}
+	if eval.Trace[0].Outcome != OutcomeExcluded {
+		t.Errorf("outcome = %v, want Excluded", eval.Trace[0].Outcome)
+	}
+}
+
+// --- Timing ---
+
+func TestEvaluator_Timing(t *testing.T) {
+	t.Parallel()
+	ev := evalSetup(t, []Definition{
+		{Name: "r1", When: `Active`, Then: []ActionEntry{{Name: "label", Value: "a"}}},
+	})
+
+	eval, err := ev.Run(context.Background(), testEnv{Active: true})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if eval.StartedAt.IsZero() {
+		t.Error("StartedAt should be set")
+	}
+	if eval.Duration == 0 {
+		t.Error("Duration should be > 0")
 	}
 }
 
@@ -524,13 +542,13 @@ func TestEvaluator_ContextCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, err := ev.Run(ctx, evalEnv{Active: true})
+	_, err := ev.Run(ctx, testEnv{Active: true})
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("got %v, want context.Canceled", err)
 	}
 }
 
-// --- Concurrent safety ---
+// --- Concurrency ---
 
 func TestEvaluator_Concurrent(t *testing.T) {
 	t.Parallel()
@@ -549,14 +567,13 @@ func TestEvaluator_Concurrent(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		go func() {
 			defer func() { done <- struct{}{} }()
-			result, err := ev.Run(context.Background(), evalEnv{Active: true})
+			eval, err := ev.Run(context.Background(), testEnv{Active: true})
 			if err != nil {
 				t.Errorf("unexpected error: %v", err)
 				return
 			}
-			labels := result.Actions.Label.Values()
-			if len(labels) != 1 || labels[0] != "concurrent" {
-				t.Errorf("Label.Values() = %v, want [concurrent]", labels)
+			if eval.Result.Label.Value != "concurrent" {
+				t.Errorf("Label.Value = %q, want concurrent", eval.Result.Label.Value)
 			}
 		}()
 	}
@@ -567,12 +584,133 @@ func TestEvaluator_Concurrent(t *testing.T) {
 
 // --- NewEvaluator validation ---
 
-func TestNewEvaluator_NotDefined(t *testing.T) {
+func TestNewEvaluator_ProgramZero(t *testing.T) {
 	t.Parallel()
-	actions := &Actions[evalActions[evalEnv], evalEnv]{}
-	rs := &Ruleset[evalEnv]{}
-	_, err := NewEvaluator(actions, rs)
-	if !errors.Is(err, ErrNotDefined) {
-		t.Errorf("got %v, want ErrNotDefined", err)
+	_, err := NewEvaluator[testEnv, testActions[testEnv]](nil)
+	if !errors.Is(err, ErrProgramZero) {
+		t.Errorf("got %v, want ErrProgramZero", err)
+	}
+}
+
+// --- Unfired actions ---
+
+func TestEvaluator_UnfiredActions(t *testing.T) {
+	t.Parallel()
+	ev := evalSetup(t, []Definition{
+		{
+			Name: "r1",
+			When: `Active`,
+			Then: []ActionEntry{{Name: "label", Value: "a"}},
+		},
+	})
+
+	eval, err := ev.Run(context.Background(), testEnv{Active: true})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Label was triggered.
+	if !eval.Result.Label.Triggered {
+		t.Error("Label should be triggered")
+	}
+
+	// Everything else was not.
+	if eval.Result.Move.Triggered {
+		t.Error("Move should not be triggered")
+	}
+	if eval.Result.Read.Triggered {
+		t.Error("Read should not be triggered")
+	}
+	if eval.Result.Priority.Triggered {
+		t.Error("Priority should not be triggered")
+	}
+	if eval.Result.Score.Triggered {
+		t.Error("Score should not be triggered")
+	}
+	if eval.Result.Delete.Triggered {
+		t.Error("Delete should not be triggered")
+	}
+}
+
+// --- Outcome.String ---
+
+func TestOutcome_String(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		o    Outcome
+		want string
+	}{
+		{OutcomeMatched, "matched"},
+		{OutcomeSkipped, "skipped"},
+		{OutcomeDisabled, "disabled"},
+		{OutcomeExcluded, "excluded"},
+		{Outcome(99), "unknown"},
+	}
+	for _, tt := range tests {
+		if got := tt.o.String(); got != tt.want {
+			t.Errorf("Outcome(%d).String() = %q, want %q", tt.o, got, tt.want)
+		}
+	}
+}
+
+// --- Selector ---
+
+func TestSelector_NoFilters(t *testing.T) {
+	t.Parallel()
+	s := selector{}
+	if !s.includes("anything", nil) {
+		t.Error("no filters should include everything")
+	}
+}
+
+func TestSelector_ExcludeOverridesInclude(t *testing.T) {
+	t.Parallel()
+	s := selector{
+		onlyTags:     map[string]bool{"billing": true},
+		excludeNames: map[string]bool{"r1": true},
+	}
+	if s.includes("r1", []string{"billing"}) {
+		t.Error("exclude should override include")
+	}
+}
+
+// --- NoArgs nil handling ---
+
+func TestEvaluator_NoArgsNilValue(t *testing.T) {
+	t.Parallel()
+	// Compile with nil Value for NoArgs action.
+	actions, compiler := compileSetup(t)
+	prog, err := Compile(compiler, actions, []Definition{
+		{
+			Name: "r1",
+			When: `Active`,
+			Then: []ActionEntry{{Name: "delete"}}, // nil value
+		},
+	})
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	ev, _ := NewEvaluator(prog)
+	eval, err := ev.Run(context.Background(), testEnv{Active: true})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !eval.Result.Delete.Triggered {
+		t.Error("Delete should be triggered with nil value")
+	}
+}
+
+func TestCompile_NilValueForNonNoArgs(t *testing.T) {
+	t.Parallel()
+	actions, compiler := compileSetup(t)
+	_, err := Compile(compiler, actions, []Definition{
+		{
+			Name: "r1",
+			When: `Active`,
+			Then: []ActionEntry{{Name: "label"}}, // nil value for string action
+		},
+	})
+	if !errors.Is(err, ErrActionValueType) {
+		t.Errorf("got %v, want ErrActionValueType", err)
 	}
 }
