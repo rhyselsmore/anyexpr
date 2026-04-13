@@ -3,7 +3,7 @@ package rules
 import (
 	"fmt"
 
-	"github.com/rhyselsmore/anyexpr/rules2/action"
+	"github.com/rhyselsmore/anyexpr/rules/action"
 )
 
 type actionBinding[V action.Valuable, E any] struct {

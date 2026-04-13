@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	rules "github.com/rhyselsmore/anyexpr/rules2"
+	rules "github.com/rhyselsmore/anyexpr/rules"
 )
 
 // Result is the outcome of a dispatch run.

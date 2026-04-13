@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/rhyselsmore/anyexpr"
-	"github.com/rhyselsmore/anyexpr/rules2/action"
+	"github.com/rhyselsmore/anyexpr/rules/action"
 )
 
 func compileSetup(t *testing.T) (*Actions[testEnv, testActions[testEnv]], *anyexpr.Compiler[testEnv]) {

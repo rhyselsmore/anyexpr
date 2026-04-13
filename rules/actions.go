@@ -5,7 +5,7 @@ import (
 	"reflect"
 	"strings"
 
-	"github.com/rhyselsmore/anyexpr/rules2/action"
+	"github.com/rhyselsmore/anyexpr/rules/action"
 )
 
 // Actions holds the action schema for type A, bound to environment

@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/rhyselsmore/anyexpr"
-	rules "github.com/rhyselsmore/anyexpr/rules2"
-	"github.com/rhyselsmore/anyexpr/rules2/action"
+	rules "github.com/rhyselsmore/anyexpr/rules"
+	"github.com/rhyselsmore/anyexpr/rules/action"
 )
 
 // --- Test types ---

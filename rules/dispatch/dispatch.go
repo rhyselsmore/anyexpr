@@ -3,7 +3,7 @@
 // then composed into [Plan]s that specify which handlers run and
 // under what conditions.
 //
-// [rules]: github.com/rhyselsmore/anyexpr/rules2
+// [rules]: github.com/rhyselsmore/anyexpr/rules
 package dispatch
 
 import (
@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/rhyselsmore/anyexpr"
-	rules "github.com/rhyselsmore/anyexpr/rules2"
+	rules "github.com/rhyselsmore/anyexpr/rules"
 )
 
 // HandlerFunc is the function signature for dispatch handlers.

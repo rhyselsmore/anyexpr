@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/rhyselsmore/anyexpr"
-	"github.com/rhyselsmore/anyexpr/rules2/action"
+	"github.com/rhyselsmore/anyexpr/rules/action"
 )
 
 // --- Check ---

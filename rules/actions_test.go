@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/rhyselsmore/anyexpr/rules2/action"
+	"github.com/rhyselsmore/anyexpr/rules/action"
 )
 
 // --- Test types ---

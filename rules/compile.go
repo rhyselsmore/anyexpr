@@ -4,7 +4,7 @@ import (
 	"fmt"
 
 	"github.com/rhyselsmore/anyexpr"
-	"github.com/rhyselsmore/anyexpr/rules2/action"
+	"github.com/rhyselsmore/anyexpr/rules/action"
 )
 
 // CompileOpt configures a Compile call.
